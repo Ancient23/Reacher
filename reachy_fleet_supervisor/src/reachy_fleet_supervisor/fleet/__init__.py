@@ -19,10 +19,30 @@ CLI, dashboard and robot body all build on.
 - U6 adds the headless ``fleet`` CLI (:mod:`.cli`): ``fleet
   start|spawn|status|logs|stop`` over SessionManager + FleetState — the
   scriptable dev/test harness, also the ``fleet`` console entry point.
+- U7 adds the read-only web dashboard (:mod:`.dashboard`,
+  :func:`create_dashboard_app`): a FastAPI 2–4 card grid + JSON poll endpoint
+  over FleetState, mountable on the Reachy Mini settings app.
 """
 
 from __future__ import annotations
 
+from .cli import (
+    main as cli_main,
+)
+from .cli import (
+    build_parser,
+)
+from .state import (
+    ATTENTION_STATES,
+    DEFAULT_LOG_LINES,
+    DEFAULT_POLL_INTERVAL,
+    FleetState,
+    Subscriber,
+    FleetPoller,
+    FleetSnapshot,
+    ManagerSnapshot,
+    tail_logs,
+)
 from .config import (
     RunMode,
     GateMode,
@@ -34,6 +54,24 @@ from .config import (
     FleetConfigError,
     load_fleet_config,
     parse_fleet_config,
+)
+from .status import (
+    STATUS_DIR_ENV,
+    SENTINEL_FAILED,
+    STATUS_FILENAME,
+    SENTINEL_RUNNING,
+    SENTINEL_COMPLETE,
+    SENTINEL_CONTINUE,
+    ATTENTION_SENTINELS,
+    SENTINEL_HUMAN_GATE,
+    ManagerStatus,
+    read_status,
+    write_status,
+    parse_sentinel,
+    read_status_for,
+    status_path_for,
+    default_status_dir,
+    read_statuses_for_agents,
 )
 from .manager import (
     DEFAULT_PERMISSION_MODE,
@@ -47,42 +85,15 @@ from .manager import (
     parse_spawn_output,
     resolve_claude_bin,
 )
+from .dashboard import (
+    DEFAULT_POLL_MS,
+    render_page,
+    snapshot_payload,
+    create_dashboard_app,
+)
 from .session_manager import (
     AgentPredicate,
     SessionManager,
-)
-from .state import (
-    ATTENTION_STATES,
-    DEFAULT_LOG_LINES,
-    DEFAULT_POLL_INTERVAL,
-    FleetPoller,
-    FleetState,
-    FleetSnapshot,
-    ManagerSnapshot,
-    Subscriber,
-    tail_logs,
-)
-from .cli import (
-    build_parser,
-    main as cli_main,
-)
-from .status import (
-    ATTENTION_SENTINELS,
-    SENTINEL_COMPLETE,
-    SENTINEL_CONTINUE,
-    SENTINEL_FAILED,
-    SENTINEL_HUMAN_GATE,
-    SENTINEL_RUNNING,
-    STATUS_DIR_ENV,
-    STATUS_FILENAME,
-    ManagerStatus,
-    default_status_dir,
-    parse_sentinel,
-    read_status,
-    read_status_for,
-    read_statuses_for_agents,
-    status_path_for,
-    write_status,
 )
 
 
@@ -142,4 +153,9 @@ __all__ = [
     # headless CLI (U6)
     "build_parser",
     "cli_main",
+    # web dashboard (U7)
+    "create_dashboard_app",
+    "render_page",
+    "snapshot_payload",
+    "DEFAULT_POLL_MS",
 ]
