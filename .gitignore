@@ -28,6 +28,10 @@ daemon*.log
 *.onnx
 *.onnx.json
 
+# Runtime logs
+.logs/
+**/.logs/
+
 # OS
 Thumbs.db
 .DS_Store
