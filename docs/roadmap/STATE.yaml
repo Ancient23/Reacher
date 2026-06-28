@@ -17,7 +17,7 @@ meta:
 status:
   current_phase: 2
   next_unit: U7
-  in_progress: null
+  in_progress: U7
   pending_gate: null        # when HUMAN_GATE: holds copy-pasteable steps the human must perform
   failure_count: 0
   units_done: 6
@@ -71,7 +71,7 @@ units:
     phase: 2
     title: Read-only web dashboard
     gate: software
-    status: pending
+    status: in_progress
     deps: [U4]
     acceptance: "FastAPI route on settings_app serving a 2–4 card grid rendering FleetState (status, tool, last line, transcript ring buffer) + a JSON poll endpoint; tests serve + assert HTTP/JSON. (Visual polish = optional light human check.)"
   - id: U8
