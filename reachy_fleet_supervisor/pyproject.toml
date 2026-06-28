@@ -24,6 +24,7 @@ all_vision = [ "torch>=2.1", "transformers==5.0.0rc2", "num2words", "ultralytics
 
 [project.scripts]
 reachy-fleet-supervisor = "reachy_fleet_supervisor.main:main"
+fleet = "reachy_fleet_supervisor.fleet.cli:main"
 
 [tool.setuptools]
 include-package-data = true

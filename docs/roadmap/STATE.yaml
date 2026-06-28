@@ -16,11 +16,11 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 2
-  next_unit: U6
+  next_unit: U7
   in_progress: null
   pending_gate: null        # when HUMAN_GATE: holds copy-pasteable steps the human must perform
   failure_count: 0
-  units_done: 5
+  units_done: 6
   units_total: 26
 
 units:
@@ -64,7 +64,7 @@ units:
     phase: 2
     title: Headless `fleet` CLI
     gate: software
-    status: pending
+    status: done
     deps: [U4]
     acceptance: "`fleet start|spawn|status|logs|stop` over SessionManager+FleetState — the headless dev/test harness. Tests drive it end-to-end against real trivial bg sessions."
   - id: U7

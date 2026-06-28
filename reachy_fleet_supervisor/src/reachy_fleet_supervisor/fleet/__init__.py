@@ -16,6 +16,9 @@ CLI, dashboard and robot body all build on.
 - U5 adds the *status convention* (:class:`ManagerStatus`, :func:`write_status`,
   :func:`read_status`): each manager emits its own drive-loop report to a known
   place and FleetState merges it — read status, never interrupt (decision #21).
+- U6 adds the headless ``fleet`` CLI (:mod:`.cli`): ``fleet
+  start|spawn|status|logs|stop`` over SessionManager + FleetState — the
+  scriptable dev/test harness, also the ``fleet`` console entry point.
 """
 
 from __future__ import annotations
@@ -58,6 +61,10 @@ from .state import (
     ManagerSnapshot,
     Subscriber,
     tail_logs,
+)
+from .cli import (
+    build_parser,
+    main as cli_main,
 )
 from .status import (
     ATTENTION_SENTINELS,
@@ -132,4 +139,7 @@ __all__ = [
     "SENTINEL_HUMAN_GATE",
     "SENTINEL_COMPLETE",
     "SENTINEL_FAILED",
+    # headless CLI (U6)
+    "build_parser",
+    "cli_main",
 ]
