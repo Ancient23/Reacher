@@ -10,6 +10,9 @@ CLI, dashboard and robot body all build on.
   (Phase 2) and decisions #11, #13, #19.
 - U3 adds :class:`SessionManager`: tracks N managers and reconnects to existing
   background sessions from the daemon roster on app restart.
+- U4 adds :class:`FleetState` (single source of truth, pub/sub) and
+  :class:`FleetPoller`: aggregate per-manager state by polling
+  ``claude agents --json`` (+ logs) and notify subscribers on change.
 """
 
 from __future__ import annotations
@@ -42,6 +45,17 @@ from .session_manager import (
     AgentPredicate,
     SessionManager,
 )
+from .state import (
+    ATTENTION_STATES,
+    DEFAULT_LOG_LINES,
+    DEFAULT_POLL_INTERVAL,
+    FleetPoller,
+    FleetState,
+    FleetSnapshot,
+    ManagerSnapshot,
+    Subscriber,
+    tail_logs,
+)
 
 
 __all__ = [
@@ -70,4 +84,14 @@ __all__ = [
     # session manager (U3)
     "SessionManager",
     "AgentPredicate",
+    # fleet state + poller (U4)
+    "FleetState",
+    "FleetSnapshot",
+    "ManagerSnapshot",
+    "FleetPoller",
+    "Subscriber",
+    "tail_logs",
+    "ATTENTION_STATES",
+    "DEFAULT_LOG_LINES",
+    "DEFAULT_POLL_INTERVAL",
 ]
