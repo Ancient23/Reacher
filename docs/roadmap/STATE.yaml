@@ -17,7 +17,7 @@ meta:
 status:
   current_phase: 2
   next_unit: U4
-  in_progress: null
+  in_progress: U4
   pending_gate: null        # when HUMAN_GATE: holds copy-pasteable steps the human must perform
   failure_count: 0
   units_done: 3
@@ -50,7 +50,7 @@ units:
     phase: 2
     title: FleetState model + poller (pub/sub)
     gate: software
-    status: pending
+    status: in_progress
     deps: [U3]
     acceptance: "FleetState aggregates per-manager state by polling `claude agents --json` (+ logs); pub/sub so subscribers get updates; tests with fake + real bg sessions."
   - id: U5
