@@ -16,11 +16,11 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 2
-  next_unit: U2
-  in_progress: U2
+  next_unit: U3
+  in_progress: null
   pending_gate: null        # when HUMAN_GATE: holds copy-pasteable steps the human must perform
   failure_count: 0
-  units_done: 1
+  units_done: 2
   units_total: 26
 
 units:
@@ -36,7 +36,7 @@ units:
     phase: 2
     title: FleetManager over `claude --bg`
     gate: software
-    status: pending
+    status: done
     deps: [U1]
     acceptance: "Spawn a manager as a background agent (claude --bg --name --session-id --permission-mode … task), capture short id + sessionId; stop/rm; tests spawn a REAL trivial bg session, assert it appears in `claude agents --json`, then clean it up."
   - id: U3
