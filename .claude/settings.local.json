@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__claude_ai_Hugging_Face__hub_repo_details",
+      "WebFetch(domain:raw.githubusercontent.com)"
+    ]
+  }
+}

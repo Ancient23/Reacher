@@ -1,0 +1,33 @@
+# Virtual environments
+.venv/
+**/.venv/
+
+# Phase-0 spike: keep the small scripts, drop heavy/scratch/3rd-party bits
+.phase0/.venv/
+.phase0/vision_ref/
+.phase0/worker_sandbox/
+.phase0/*.log
+.phase0/*.log.*
+.phase0/*.pid
+.phase0/app.pid
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Secrets / local env / runtime
+.env
+.env.local
+*.pid
+daemon*.log
+
+# Models / large downloaded assets (fetched at runtime)
+*.onnx
+*.onnx.json
+
+# OS
+Thumbs.db
+.DS_Store

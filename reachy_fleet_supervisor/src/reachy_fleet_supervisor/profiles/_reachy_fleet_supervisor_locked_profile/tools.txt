@@ -1,0 +1,12 @@
+# Tools for the Reachy fleet supervisor (OpenAI Realtime voice + Claude Code delegation)
+
+# Expressive body
+play_emotion
+stop_emotion
+dance
+stop_dance
+move_head
+sweep_look
+
+# Delegate real engineering work to Claude Code (runs on the Max plan)
+ask_claude_code
