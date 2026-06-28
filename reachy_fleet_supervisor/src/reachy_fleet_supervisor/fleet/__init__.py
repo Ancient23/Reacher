@@ -36,6 +36,25 @@ from .cli import (
 from .cli import (
     build_parser,
 )
+from .body import (
+    SIGNAL_DONE,
+    SIGNAL_IDLE,
+    ANTENNA_POSES,
+    SIGNAL_FAILED,
+    SIGNAL_WORKING,
+    ANTENNA_MAX_DEG,
+    SIGNAL_ATTENTION,
+    BODY_YAW_SPAN_DEG,
+    BodyPose,
+    BodyApplier,
+    FleetBodyRenderer,
+    slot_yaw,
+    antenna_pose,
+    signal_state,
+    choose_target,
+    body_signal_for,
+    make_goto_applier,
+)
 from .state import (
     ATTENTION_STATES,
     DEFAULT_LOG_LINES,
@@ -89,6 +108,12 @@ from .manager import (
     parse_spawn_output,
     resolve_claude_bin,
 )
+from .identity import (
+    PALETTE,
+    AgentColor,
+    color_for,
+    assign_colors,
+)
 from .dashboard import (
     DEFAULT_POLL_MS,
     render_page,
@@ -98,12 +123,6 @@ from .dashboard import (
 from .session_manager import (
     AgentPredicate,
     SessionManager,
-)
-from .identity import (
-    PALETTE,
-    AgentColor,
-    color_for,
-    assign_colors,
 )
 
 
@@ -173,4 +192,22 @@ __all__ = [
     "PALETTE",
     "color_for",
     "assign_colors",
+    # body renderer (U8)
+    "BodyPose",
+    "BodyApplier",
+    "FleetBodyRenderer",
+    "body_signal_for",
+    "signal_state",
+    "choose_target",
+    "antenna_pose",
+    "slot_yaw",
+    "make_goto_applier",
+    "ANTENNA_POSES",
+    "ANTENNA_MAX_DEG",
+    "BODY_YAW_SPAN_DEG",
+    "SIGNAL_IDLE",
+    "SIGNAL_WORKING",
+    "SIGNAL_ATTENTION",
+    "SIGNAL_DONE",
+    "SIGNAL_FAILED",
 ]

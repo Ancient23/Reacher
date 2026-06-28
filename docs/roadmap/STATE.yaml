@@ -17,11 +17,53 @@ meta:
 status:
   current_phase: 2
   next_unit: U8
-  in_progress: null
-  pending_gate: null        # when HUMAN_GATE: holds copy-pasteable steps the human must perform
+  in_progress: U8
   failure_count: 0
   units_done: 8
   units_total: 26
+  # HUMAN_GATE: U8 software (status->head/antenna mapping + renderer + applier) is
+  # built and tested against a fake applier; real motion can only be confirmed on
+  # the physical robot. Perform the steps below and report back PASS or a PROBLEM.
+  pending_gate: |
+    U8 — Body renders FleetState (HARDWARE verification)
+
+    Software done: fleet status -> body signals is implemented in
+    src/reachy_fleet_supervisor/fleet/body.py (FleetBodyRenderer + make_goto_applier),
+    exported from the `fleet` package, and covered by tests/fleet/test_body.py
+    (21 tests green, incl. the demo scenario). A self-contained hardware demo drives
+    the real robot through a scripted fleet (no live `claude` agents needed).
+
+    Mapping under test:
+      - BODY YAW points at the manager needing attention (each manager owns a fixed
+        slot angle, ±40 deg; faces front / 0 deg when nobody needs you).
+      - ANTENNAS encode state: working = +15/+15 deg, attention = +45/+45 (perked up),
+        failed = -30/-30 (drooped), done = +30/+30.
+
+    DO THIS:
+      1. Power the Reachy Mini ON via the REAR USB-C port (NOT the front/USB-B port —
+         it browns out the motors). Wait for the daemon/motor backend to come up.
+      2. From the repo:
+             cd reachy_fleet_supervisor
+             uv run python -m reachy_fleet_supervisor.fleet.body_demo --hold 4
+         (each step holds 4s; pass e.g. --hold 6 to slow it down.)
+      3. The demo prints "[n] <label>" and a "LOOK FOR:" line per step. Confirm the
+         BODY matches, in this order:
+           [1] both working   -> faces FRONT (0 deg), antennas slightly up (working)
+           [2] 'tests' gate    -> torso TURNS toward 'tests' (yaw +40 deg, one side),
+                                  antennas PERK UP high (attention)
+           [3] 'build' fails   -> torso TURNS the OTHER way toward 'build' (yaw -40 deg),
+                                  antennas DROOP down (failed)
+           [4] both complete   -> faces FRONT again (0 deg), antennas relaxed up (done)
+         It then returns to neutral and exits.
+
+    REPORT BACK:
+      - PASS if the body turns toward the flagged manager at steps 2 and 3 (two
+        distinct, opposite directions) and the antennas visibly differ per state.
+      - PROBLEM (describe what you saw) otherwise — e.g. wrong direction, no antenna
+        change, motor brownout/errors, or it never reaches the robot. Note: if the
+        torso turns to the OPPOSITE side than expected for a manager, that's an easy
+        sign-flip fix (negate body_yaw in make_goto_applier) — say so and it'll be
+        fixed in this same unit.
 
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
@@ -78,7 +120,7 @@ units:
     phase: 2
     title: Body renders FleetState
     gate: hardware
-    status: pending
+    status: in_progress
     deps: [U4]
     acceptance: "Map fleet status → head/antenna signals (body yaw toward the manager needing attention; antenna = state). HUMAN_GATE: human powers robot (rear USB-C) and confirms the body signals the right manager."
   - id: U9
