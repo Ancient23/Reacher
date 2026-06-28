@@ -62,14 +62,18 @@ SIGNAL_FAILED = "failed"
 # across [-SPAN, +SPAN]; kept modest so the Lite's body_yaw stays well in range.
 BODY_YAW_SPAN_DEG = 40.0
 
-# Antenna pose per signal, as (left, right) degrees. Distinct magnitudes so the
-# states are tellable apart at a glance: perked-up = wants you, drooped = failed.
+# Antenna pose per signal, as (left, right) degrees. Both antennas share a sign so
+# they move together (same-sign = same visual direction; opposite signs would just
+# wiggle — cf. the breathing "sway" of [a, -a]). Every non-failed state perks the
+# antennas UP (>= 0); only ``failed`` drives them clearly DOWN, so a failure is the
+# one unmistakable droop. ``failed`` mirrors ``attention`` in magnitude (-45 vs +45)
+# = "fully down" vs "fully up", the most tellable-apart pair.
 ANTENNA_POSES: dict[str, tuple[float, float]] = {
     SIGNAL_IDLE: (0.0, 0.0),
     SIGNAL_WORKING: (15.0, 15.0),
     SIGNAL_ATTENTION: (45.0, 45.0),
     SIGNAL_DONE: (30.0, 30.0),
-    SIGNAL_FAILED: (-30.0, -30.0),
+    SIGNAL_FAILED: (-45.0, -45.0),
 }
 
 # Defensive clamp so a bad config can never command the antennas past this.
@@ -242,14 +246,24 @@ def make_goto_applier(
 ) -> BodyApplier:
     """Build an applier that queues a ``GotoQueueMove`` for a :class:`BodyPose`.
 
-    Degrees → radians here (the kinematics layer is radian-native). The current
-    pose is read best-effort for a smooth interpolation start; on any read error
-    it falls back to the move's neutral default rather than refusing to move.
-    ``reachy_mini``/``GotoQueueMove`` are imported lazily so importing this module
-    (for the pure mapping or the tests) never pulls in the motor stack.
+    Degrees → radians here (the kinematics layer is radian-native). The applier
+    remembers the **last body_yaw + antennas it commanded** and interpolates the
+    next move from there. This is deliberate: ``get_current_joint_positions()``
+    exposes only head + antennas (no body_yaw at all), so the torso angle can't be
+    read back — and starting every move from the *last commanded* pose (rather than
+    a neutral default) is what keeps consecutive turns smooth instead of snapping
+    through 0° between managers. The head is always commanded neutral relative to
+    the torso; its start is read best-effort for smoothness, falling back to the
+    move's neutral default on any read error. ``reachy_mini``/``GotoQueueMove`` are
+    imported lazily so importing this module never pulls in the motor stack.
     """
+    # Last *commanded* body_yaw + antennas in radians; the interpolation start for
+    # the next move (so a +40°→-40° turn sweeps through, not via a jump to 0°).
+    last_body_yaw = 0.0
+    last_antennas = (0.0, 0.0)
 
     def apply(pose: BodyPose) -> Any:
+        nonlocal last_body_yaw, last_antennas
         from reachy_mini.utils import create_head_pose
         from ..dance_emotion_moves import GotoQueueMove
 
@@ -262,31 +276,28 @@ def make_goto_applier(
         except Exception:  # noqa: BLE001 — best-effort start for smooth motion
             logger.debug("body applier: could not read current head pose", exc_info=True)
 
-        start_body_yaw: Optional[float] = None
-        start_antennas: Optional[tuple[float, float]] = None
-        try:
-            _, joints = reachy_mini.get_current_joint_positions()
-            start_body_yaw = float(joints[0])
-            start_antennas = (float(joints[1]), float(joints[2]))
-        except Exception:  # noqa: BLE001 — fall back to neutral start
-            logger.debug("body applier: could not read current joints", exc_info=True)
+        target_antennas = (
+            math.radians(pose.antenna_left_deg),
+            math.radians(pose.antenna_right_deg),
+        )
+        target_body_yaw = math.radians(pose.body_yaw_deg)
 
         move = GotoQueueMove(
             target_head_pose=target_head,
             start_head_pose=start_head,
-            target_antennas=(
-                math.radians(pose.antenna_left_deg),
-                math.radians(pose.antenna_right_deg),
-            ),
-            start_antennas=start_antennas,
-            target_body_yaw=math.radians(pose.body_yaw_deg),
-            start_body_yaw=start_body_yaw,
+            target_antennas=target_antennas,
+            start_antennas=last_antennas,
+            target_body_yaw=target_body_yaw,
+            start_body_yaw=last_body_yaw,
             duration=duration,
         )
         movement_manager.queue_move(move)
         set_moving = getattr(movement_manager, "set_moving_state", None)
         if callable(set_moving):
             set_moving(duration)
+
+        last_body_yaw = target_body_yaw
+        last_antennas = target_antennas
         return move
 
     return apply

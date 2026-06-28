@@ -108,8 +108,21 @@ def test_antenna_pose_distinct_per_signal() -> None:
     }
     assert len(set(poses.values())) == len(poses), "each signal needs a distinct antenna pose"
     assert poses[SIGNAL_IDLE] == (0.0, 0.0)
-    assert poses[SIGNAL_FAILED][0] < 0, "failed antennas droop"
     assert poses[SIGNAL_ATTENTION][0] > poses[SIGNAL_WORKING][0], "attention perks higher than working"
+
+
+def test_failed_is_the_only_downward_droop() -> None:
+    # The human-perceptual fix: ``failed`` must be the one state whose antennas go
+    # clearly DOWN (below neutral) while every other state sits at/above neutral —
+    # so a failure is the single unmistakable droop.
+    failed = antenna_pose(SIGNAL_FAILED)
+    assert failed[0] < 0 and failed[1] < 0, "failed antennas droop downward"
+    assert failed[0] == failed[1], "both antennas droop together (same sign/magnitude)"
+    for sig in (SIGNAL_IDLE, SIGNAL_WORKING, SIGNAL_ATTENTION, SIGNAL_DONE):
+        left, right = antenna_pose(sig)
+        assert left >= 0 and right >= 0, f"{sig} should not droop below neutral"
+    # And the droop is emphatic, not a token dip — at least as deep as 'done' is high.
+    assert failed[0] <= -antenna_pose(SIGNAL_DONE)[0], "failed droop should be clearly visible"
 
 
 def test_antenna_pose_unknown_signal_falls_back_to_idle() -> None:
@@ -341,6 +354,27 @@ def test_make_goto_applier_queues_one_move_in_radians() -> None:
     assert move.duration == 0.5
 
 
+def test_make_goto_applier_interpolates_from_last_commanded_pose() -> None:
+    # Smoothness / anti-abruptness: a second move must start from where the first
+    # one ended (body_yaw can't be read back from the robot, so the applier tracks
+    # it) — otherwise a +40°→-40° turn would jump through 0° between managers.
+    mm = _FakeMovementManager()
+    apply = make_goto_applier(_FakeReachy(), mm, duration=1.0)
+
+    m1 = apply(BodyPose(body_yaw_deg=40.0, antenna_left_deg=45.0, antenna_right_deg=45.0))
+    # First move starts from neutral (nothing commanded yet).
+    assert math.isclose(m1.start_body_yaw, 0.0)
+    assert m1.start_antennas == (0.0, 0.0)
+
+    m2 = apply(BodyPose(body_yaw_deg=-40.0, antenna_left_deg=-45.0, antenna_right_deg=-45.0))
+    # Second move starts where the first ended — no snap back to 0.
+    assert math.isclose(m2.start_body_yaw, math.radians(40.0))
+    assert math.isclose(m2.start_antennas[0], math.radians(45.0))
+    assert math.isclose(m2.start_antennas[1], math.radians(45.0))
+    assert math.isclose(m2.target_body_yaw, math.radians(-40.0))
+    assert math.isclose(m2.target_antennas[0], math.radians(-45.0))
+
+
 def test_make_goto_applier_tolerates_unreadable_current_pose() -> None:
     class _Broken:
         def get_current_head_pose(self):  # noqa: ANN201 - test fake
@@ -381,3 +415,55 @@ def test_demo_scenario_signals_the_expected_sequence() -> None:
     failed_pose = applier.poses[2]
     assert attention_pose.target_key == "tests" and attention_pose.body_yaw_deg == BODY_YAW_SPAN_DEG
     assert failed_pose.target_key == "build" and failed_pose.body_yaw_deg == -BODY_YAW_SPAN_DEG
+
+    # The failure beat must droop the antennas DOWN, and be the only step that does
+    # — this is the behaviour the human reported missing.
+    assert failed_pose.antenna_left_deg < 0 and failed_pose.antenna_right_deg < 0
+    for i, pose in enumerate(applier.poses):
+        if i != 2:
+            assert pose.antenna_left_deg >= 0, f"only the failed step should droop (step {i})"
+
+
+# ---------------------------------------------------------------------------
+# hold_pose — keep the signalled pose on the robot (no idle-breathing revert)
+# ---------------------------------------------------------------------------
+
+
+class _ClockMM:
+    """Fake movement manager + injectable clock to test the hold loop without real time."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+        self.marks: list[float] = []
+
+    def set_moving_state(self, duration: float) -> None:
+        self.marks.append(duration)
+
+    def now(self) -> float:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        self.t += seconds
+
+
+def test_hold_pose_marks_activity_below_idle_delay() -> None:
+    from reachy_fleet_supervisor.fleet.body_demo import hold_pose
+
+    mm = _ClockMM()
+    hold_pose(mm, 1.0, tick=0.2, sleep=mm.sleep, monotonic=mm.now)
+
+    # It held for ~the requested duration...
+    assert math.isclose(mm.t, 1.0, abs_tol=0.21)
+    # ...re-asserting activity several times (so idle breathing never starts),
+    # each tick safely below the MovementManager's 0.3s idle-breathing delay.
+    assert len(mm.marks) >= 4
+    assert all(d < 0.3 for d in mm.marks), "ticks must stay under the idle-breathing delay"
+
+
+def test_hold_pose_zero_seconds_still_marks_once() -> None:
+    from reachy_fleet_supervisor.fleet.body_demo import hold_pose
+
+    mm = _ClockMM()
+    hold_pose(mm, 0.0, tick=0.2, sleep=mm.sleep, monotonic=mm.now)
+    assert mm.marks == [0.2], "a zero hold should still refresh the pose once"
+    assert mm.t == 0.0

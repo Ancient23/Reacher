@@ -8,8 +8,8 @@ that the body signals the right manager:
 - two managers both working  → face front, antennas in the *working* pose;
 - the right-hand manager hits a HUMAN_GATE → torso turns toward it, antennas perk
   up (*attention*);
-- the left-hand manager fails → torso turns the other way, antennas droop
-  (*failed*);
+- the left-hand manager fails → torso turns the other way, antennas droop clearly
+  *down* (*failed*, the one state that drives the antennas below neutral);
 - both finish → face front, antennas in the *done* pose.
 
 The scenario itself (:func:`demo_steps`) is pure and unit-tested; only
@@ -120,6 +120,37 @@ def _apply_step(state: FleetState, step: DemoStep, *, now: float) -> str:
     return body_signal_for(snap).describe()
 
 
+def hold_pose(
+    movement_manager: object,
+    seconds: float,
+    *,
+    tick: float = 0.2,
+    sleep=time.sleep,
+    monotonic=time.monotonic,
+) -> None:
+    """Hold the current body pose for ~*seconds*, suppressing idle breathing.
+
+    The :class:`~reachy_fleet_supervisor.moves.MovementManager` starts an idle
+    ``BreathingMove`` ~0.3s after the last activity, which pulls the body back to
+    neutral — antennas *un-droop* and the torso *re-centres*. That is exactly why
+    a drooped/turned signal "never" appears to hold. Re-asserting activity every
+    *tick* (kept below the idle delay) keeps the last commanded pose on the robot
+    so the human actually sees the signalled state for the whole step. The clock /
+    sleep are injectable so the loop is unit-testable without real time.
+    """
+    deadline = monotonic() + max(0.0, seconds)
+    while True:
+        # set_moving_state marks activity (its value is advisory), keeping the
+        # MovementManager out of idle-breathing so the pose is held, not reverted.
+        mark = getattr(movement_manager, "set_moving_state", None)
+        if callable(mark):
+            mark(tick)
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            break
+        sleep(min(tick, remaining))
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Drive the physical robot through the scripted scenario."""
     parser = argparse.ArgumentParser(description="U8 body-renderer hardware demo")
@@ -130,7 +161,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--robot-name", default=None, help="optional Reachy Mini robot name"
     )
     parser.add_argument(
-        "--duration", type=float, default=1.0, help="motion duration per move (s)"
+        "--duration",
+        type=float,
+        default=1.5,
+        help="motion duration per move in s (higher = gentler/less abrupt)",
     )
     args = parser.parse_args(argv)
 
@@ -156,7 +190,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             expected = _apply_step(state, step, now=float(i))
             print(f"\n[{i}] {step.label}")
             print(f"    LOOK FOR: {expected}")
-            time.sleep(args.hold)
+            # Hold (not plain sleep) so idle breathing doesn't revert the pose to
+            # neutral mid-step — otherwise the droop/turn only flashes for ~1s.
+            hold_pose(movement_manager, args.hold)
         print("\nDemo complete. Returning to neutral.")
     finally:
         unsubscribe()

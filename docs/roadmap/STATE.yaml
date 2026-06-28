@@ -21,49 +21,60 @@ status:
   failure_count: 0
   units_done: 8
   units_total: 26
-  # HUMAN_GATE: U8 software (status->head/antenna mapping + renderer + applier) is
-  # built and tested against a fake applier; real motion can only be confirmed on
-  # the physical robot. Perform the steps below and report back PASS or a PROBLEM.
+  # HUMAN_GATE (RE-EMITTED after a reported PROBLEM): the human ran the demo and saw
+  # the body turn (a bit abrupt) but the antennas never drooped on failure. Fixed in
+  # this same unit (U8 stays in_progress): (1) idle BreathingMove was reverting each
+  # pose to neutral ~0.3s after the goto ended — the demo now HOLDS each pose; (2) the
+  # applier read current joints wrong (get_current_joint_positions has no body_yaw and
+  # only 2 antennas) so every move snapped through 0° — it now interpolates from the
+  # last commanded pose (smoother); (3) failed droop deepened -30→-45 (mirror of
+  # attention +45). Antenna droop is HARDWARE-PERCEPTUAL — cannot self-verify; re-gated.
   pending_gate: |
-    U8 — Body renders FleetState (HARDWARE verification)
+    U8 — Body renders FleetState (HARDWARE re-verification after a fix)
 
-    Software done: fleet status -> body signals is implemented in
-    src/reachy_fleet_supervisor/fleet/body.py (FleetBodyRenderer + make_goto_applier),
-    exported from the `fleet` package, and covered by tests/fleet/test_body.py
-    (21 tests green, incl. the demo scenario). A self-contained hardware demo drives
-    the real robot through a scripted fleet (no live `claude` agents needed).
+    You previously reported: body turns (a bit abrupt) but "the antennas never droop
+    down on failure." That is now fixed in software (tests/fleet/test_body.py green):
+      - the demo now HOLDS each pose instead of letting idle breathing pull the body
+        back to neutral after ~1s (the real reason the droop "never" showed);
+      - moves now interpolate from the last commanded pose, so turns sweep smoothly
+        instead of snapping through center (less abrupt);
+      - the failed droop is deeper now: -45/-45 deg (a clear mirror of the +45/+45
+        "attention" perk), and failed is the ONLY state that drops below neutral.
 
     Mapping under test:
-      - BODY YAW points at the manager needing attention (each manager owns a fixed
-        slot angle, ±40 deg; faces front / 0 deg when nobody needs you).
-      - ANTENNAS encode state: working = +15/+15 deg, attention = +45/+45 (perked up),
-        failed = -30/-30 (drooped), done = +30/+30.
+      - BODY YAW points at the manager needing attention (fixed slot angle, ±40 deg;
+        faces front / 0 deg when nobody needs you).
+      - ANTENNAS encode state: working = +15/+15 (slightly up), attention = +45/+45
+        (perked high), failed = -45/-45 (drooped DOWN), done = +30/+30 (relaxed up).
 
     DO THIS:
       1. Power the Reachy Mini ON via the REAR USB-C port (NOT the front/USB-B port —
          it browns out the motors). Wait for the daemon/motor backend to come up.
       2. From the repo:
              cd reachy_fleet_supervisor
-             uv run python -m reachy_fleet_supervisor.fleet.body_demo --hold 4
-         (each step holds 4s; pass e.g. --hold 6 to slow it down.)
-      3. The demo prints "[n] <label>" and a "LOOK FOR:" line per step. Confirm the
-         BODY matches, in this order:
-           [1] both working   -> faces FRONT (0 deg), antennas slightly up (working)
-           [2] 'tests' gate    -> torso TURNS toward 'tests' (yaw +40 deg, one side),
-                                  antennas PERK UP high (attention)
-           [3] 'build' fails   -> torso TURNS the OTHER way toward 'build' (yaw -40 deg),
-                                  antennas DROOP down (failed)
-           [4] both complete   -> faces FRONT again (0 deg), antennas relaxed up (done)
+             uv run python -m reachy_fleet_supervisor.fleet.body_demo --hold 5
+         (each step now HOLDS its pose for the full window; --duration defaults to
+         1.5s for a gentler turn — raise it, e.g. --duration 2, if still too abrupt.)
+      3. The demo prints "[n] <label>" + a "LOOK FOR:" line per step. Confirm the BODY
+         matches AND that each pose is HELD steady (not snapping back to neutral):
+           [1] both working   -> faces FRONT (0 deg), antennas slightly UP (working)
+           [2] 'tests' gate   -> torso TURNS toward 'tests' (yaw +40 deg, one side),
+                                 antennas PERK UP high (attention)
+           [3] 'build' fails  -> torso TURNS the OTHER way toward 'build' (yaw -40 deg),
+                                 *** ANTENNAS now DROOP clearly DOWN *** (failed) and
+                                 STAY drooped for the whole step — THIS is the fix to
+                                 confirm.
+           [4] both complete  -> faces FRONT again (0 deg), antennas relaxed UP (done)
          It then returns to neutral and exits.
 
     REPORT BACK:
-      - PASS if the body turns toward the flagged manager at steps 2 and 3 (two
-        distinct, opposite directions) and the antennas visibly differ per state.
-      - PROBLEM (describe what you saw) otherwise — e.g. wrong direction, no antenna
-        change, motor brownout/errors, or it never reaches the robot. Note: if the
-        torso turns to the OPPOSITE side than expected for a manager, that's an easy
-        sign-flip fix (negate body_yaw in make_goto_applier) — say so and it'll be
-        fixed in this same unit.
+      - PASS if at step [3] the antennas visibly DROOP DOWN and hold there, the body
+        turns toward the flagged manager at steps 2 and 3 (two distinct, opposite
+        directions), and the turn is acceptably smooth.
+      - PROBLEM (describe what you saw) otherwise — e.g. antennas still don't droop /
+        droop the wrong way (a sign issue → flip ANTENNA_POSES[failed] sign), pose not
+        held, wrong/opposite turn direction (negate body_yaw in make_goto_applier),
+        too abrupt (raise --duration), or motor brownout/errors.
 
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
@@ -174,6 +185,7 @@ units:
     status: pending
     deps: [U13, U14]
     acceptance: "HUMAN_GATE surfaces to the Realtime host and is spoken; the spoken answer resumes the loop. HUMAN_GATE: confirm by voice on the robot."
+    notes: "Backlog (from U8 hardware feedback 2026-06-28): also have Reachy SPEAK the fleet status aloud (e.g. on a state change / on request — 'build failed', 'tests needs you'), not just signal it on the body. Body + voice are complementary renderers of FleetState; voice plumbing belongs here."
   - id: U16
     phase: 3
     title: Written plan file per manager
