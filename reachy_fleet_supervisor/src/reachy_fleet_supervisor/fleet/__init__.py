@@ -22,6 +22,10 @@ CLI, dashboard and robot body all build on.
 - U7 adds the read-only web dashboard (:mod:`.dashboard`,
   :func:`create_dashboard_app`): a FastAPI 2–4 card grid + JSON poll endpoint
   over FleetState, mountable on the Reachy Mini settings app.
+- U9 adds per-agent *identity* (:mod:`.identity`, :class:`AgentColor`,
+  :func:`assign_colors`): a stable name + distinct color per manager, surfaced
+  through FleetState / CLI / dashboard so 2–4 concurrent managers are
+  distinguishable at a glance and "the amber one" means the same one everywhere.
 """
 
 from __future__ import annotations
@@ -95,6 +99,12 @@ from .session_manager import (
     AgentPredicate,
     SessionManager,
 )
+from .identity import (
+    PALETTE,
+    AgentColor,
+    color_for,
+    assign_colors,
+)
 
 
 __all__ = [
@@ -158,4 +168,9 @@ __all__ = [
     "render_page",
     "snapshot_payload",
     "DEFAULT_POLL_MS",
+    # per-agent identity (U9)
+    "AgentColor",
+    "PALETTE",
+    "color_for",
+    "assign_colors",
 ]

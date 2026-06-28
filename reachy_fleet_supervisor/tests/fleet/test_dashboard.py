@@ -153,6 +153,25 @@ def test_index_renders_card_grid() -> None:
     assert "api/fleet" in body  # the live-poll script targets the JSON endpoint
 
 
+def test_card_renders_identity_color() -> None:
+    """Each server-rendered card carries its manager's identity color (U9)."""
+    state = _state_with(_agent("aaa111", "alice"), _agent("bbb222", "bob"))
+    cards = render_cards(state.snapshot)
+    snap = state.snapshot
+    for m in snap.managers:
+        assert m.color is not None
+        assert f"--agent:{m.color.hex}" in cards
+        assert f'title="{m.color.name}"' in cards
+    assert cards.count('class="dot"') == 2
+
+
+def test_api_fleet_includes_color() -> None:
+    state = _state_with(_agent("aaa111", "alice"))
+    mgr = TestClient(create_dashboard_app(state)).get("/api/fleet").json()["managers"][0]
+    assert mgr["color"] is not None
+    assert {"name", "hex", "ansi"} <= set(mgr["color"])
+
+
 def test_index_empty_state() -> None:
     """With no managers the page shows the empty-state message, not a card."""
     page = render_page(FleetState().snapshot, title="T", poll_ms=2000)

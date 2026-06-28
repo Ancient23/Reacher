@@ -16,11 +16,11 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 2
-  next_unit: U9
+  next_unit: U8
   in_progress: null
   pending_gate: null        # when HUMAN_GATE: holds copy-pasteable steps the human must perform
   failure_count: 0
-  units_done: 7
+  units_done: 8
   units_total: 26
 
 units:
@@ -85,7 +85,7 @@ units:
     phase: 2
     title: Per-agent identity (name/color) + 2–4 wiring
     gate: software
-    status: pending
+    status: done
     deps: [U4]
     acceptance: "Stable name + color per manager surfaced through FleetState/CLI/dashboard; designed for 2–4 concurrent. Tested."
   - id: U10

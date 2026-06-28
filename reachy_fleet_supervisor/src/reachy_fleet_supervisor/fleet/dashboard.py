@@ -83,9 +83,11 @@ def _render_card(m: ManagerSnapshot) -> str:
     transcript = "\n".join(_esc(line) for line in m.transcript) or "(no transcript)"
     attn = " attention" if m.needs_attention else ""
     state_slug = _esc((m.state or "unknown").lower())
-    return f"""      <article class="card{attn}" data-key="{ident}">
+    color_hex = _esc(m.color.hex) if m.color is not None else "transparent"
+    color_name = _esc(m.color.name) if m.color is not None else ""
+    return f"""      <article class="card{attn}" data-key="{ident}" style="--agent:{color_hex}">
         <header>
-          <span class="name">{name}</span>
+          <span class="name"><span class="dot" title="{color_name}"></span>{name}</span>
           <span class="id">{ident}</span>
         </header>
         <div class="row"><span class="badge state-{state_slug}">{state}</span>{report}
@@ -118,10 +120,14 @@ def render_page(snapshot: FleetSnapshot, *, title: str, poll_ms: int) -> str:
     .muted {{ color: #888; font-size: .8rem; }}
     #grid {{ display: grid; gap: 1rem;
              grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }}
-    .card {{ border: 1px solid #8884; border-radius: 10px; padding: .75rem; }}
-    .card.attention {{ border-color: #e0a400; box-shadow: 0 0 0 2px #e0a40066; }}
+    .card {{ border: 1px solid #8884; border-left: 4px solid var(--agent, #8884);
+             border-radius: 10px; padding: .75rem; }}
+    .card.attention {{ border-color: #e0a400; border-left-color: var(--agent, #e0a400);
+                       box-shadow: 0 0 0 2px #e0a40066; }}
     .card header {{ display: flex; justify-content: space-between; align-items: baseline; }}
     .name {{ font-weight: 600; }}
+    .dot {{ display: inline-block; width: .6rem; height: .6rem; border-radius: 50%;
+            margin-right: .35rem; background: var(--agent, #8888); vertical-align: baseline; }}
     .id {{ font-family: monospace; font-size: .75rem; color: #888; }}
     .row {{ display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .4rem 0; }}
     .badge {{ font-size: .7rem; text-transform: uppercase; padding: .1rem .4rem;
@@ -156,8 +162,10 @@ def render_page(snapshot: FleetSnapshot, *, title: str, poll_ms: int) -> str:
       const headline = m.headline ? esc(m.headline) : "<em>no output yet</em>";
       const transcript = (m.transcript && m.transcript.length)
         ? m.transcript.map(esc).join("\\n") : "(no transcript)";
-      return `<article class="card${{m.needs_attention ? " attention" : ""}}" data-key="${{id}}">
-        <header><span class="name">${{esc(m.name || "<unnamed>")}}</span>
+      const colorHex = (m.color && m.color.hex) ? esc(m.color.hex) : "transparent";
+      const colorName = (m.color && m.color.name) ? esc(m.color.name) : "";
+      return `<article class="card${{m.needs_attention ? " attention" : ""}}" data-key="${{id}}" style="--agent:${{colorHex}}">
+        <header><span class="name"><span class="dot" title="${{colorName}}"></span>${{esc(m.name || "<unnamed>")}}</span>
           <span class="id">${{id}}</span></header>
         <div class="row"><span class="badge state-${{esc((m.state||"unknown").toLowerCase())}}">${{state}}</span>${{report}}
           <span class="tool">tool: ${{esc(m.status || "\\u2014")}}</span></div>

@@ -137,6 +137,30 @@ def test_status_merges_emitted_status(monkeypatch, tmp_path) -> None:
     assert m["headline"] == "needs the robot"
 
 
+def test_status_json_includes_identity_color(monkeypatch) -> None:
+    """Each manager carries a stable, distinct identity color in --json (U9)."""
+    _patch_roster(monkeypatch, [_bg_row("aaaa1111", "alpha"), _bg_row("bbbb2222", "bravo")])
+    code, out, _ = _run(["status", "--json"])
+    assert code == 0
+    managers = json.loads(out)["managers"]
+    colors = [m["color"] for m in managers]
+    assert all(c is not None for c in colors)
+    assert all({"name", "hex", "ansi"} <= set(c) for c in colors)
+    # 2 concurrent managers must be visually distinct.
+    assert colors[0]["name"] != colors[1]["name"]
+
+
+def test_status_text_shows_color_name(monkeypatch) -> None:
+    _patch_roster(monkeypatch, [_bg_row("aaaa1111", "alpha")])
+    # color name appears as a tag and the name [id] stays contiguous.
+    code, out, _ = _run(["status"])
+    assert code == 0
+    assert "alpha [aaaa1111]" in out
+    from reachy_fleet_supervisor.fleet import color_for
+
+    assert color_for("aaaa1111").name in out
+
+
 def test_start_reports_reconnect(monkeypatch) -> None:
     _patch_roster(monkeypatch, [_bg_row("aaaa1111", "alpha")])
     code, out, _ = _run(["start"])

@@ -90,6 +90,19 @@ def test_manager_snapshot_value_equality() -> None:
     assert a != c
 
 
+def test_apply_assigns_stable_distinct_colors() -> None:
+    """apply() fills each manager's identity color, distinct across the fleet (U9)."""
+    fs = FleetState()
+    snap = fs.apply([_bg("aaaa1111", "alpha"), _bg("bbbb2222", "bravo")], now=1.0)
+    colors = [m.color for m in snap.managers]
+    assert all(c is not None for c in colors)
+    assert colors[0] != colors[1], "concurrent managers must be distinct"
+
+    # Stable across a re-poll of the same fleet.
+    snap2 = fs.apply([_bg("aaaa1111", "alpha"), _bg("bbbb2222", "bravo")], now=2.0)
+    assert [m.color for m in snap2.managers] == colors
+
+
 # ---------------------------------------------------------------------------
 # FleetSnapshot
 # ---------------------------------------------------------------------------

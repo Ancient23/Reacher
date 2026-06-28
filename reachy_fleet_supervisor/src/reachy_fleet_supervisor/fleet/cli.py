@@ -53,6 +53,7 @@ def _manager_dict(m: ManagerSnapshot, *, include_transcript: bool = False) -> di
         "headline": m.headline,
         "last_line": m.last_line,
         "report": m.report.to_dict() if m.report is not None else None,
+        "color": m.color.to_dict() if m.color is not None else None,
     }
     if include_transcript:
         data["transcript"] = list(m.transcript)
@@ -71,7 +72,9 @@ def _snapshot_dict(snap: FleetSnapshot, *, include_transcript: bool = False) -> 
 def _format_manager(m: ManagerSnapshot, *, include_transcript: bool = False) -> str:
     """Render one manager as a short human-readable block."""
     flag = " (!) needs attention" if m.needs_attention else ""
-    head = f"{m.name or '<unnamed>'} [{m.id or m.session_id}]"
+    swatch = f"{m.color.swatch()} " if m.color is not None else ""
+    color_tag = f" ·{m.color.name}" if m.color is not None else ""
+    head = f"{swatch}{m.name or '<unnamed>'} [{m.id or m.session_id}]{color_tag}"
     bits = []
     if m.state:
         bits.append(f"state={m.state}")

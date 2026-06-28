@@ -44,6 +44,7 @@ from .status import (
     ManagerStatus,
     read_statuses_for_agents,
 )
+from .identity import AgentColor, assign_colors
 
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ class ManagerSnapshot:
     started_at: Optional[int] = None
     transcript: tuple[str, ...] = ()
     report: Optional[ManagerStatus] = None
+    color: Optional[AgentColor] = None
 
     @classmethod
     def from_agent_info(
@@ -97,9 +99,12 @@ class ManagerSnapshot:
         *,
         transcript: Sequence[str] = (),
         report: Optional[ManagerStatus] = None,
+        color: Optional[AgentColor] = None,
     ) -> "ManagerSnapshot":
-        """Build a snapshot from a roster row, an optional recent-log tail, and
-        the manager's own emitted status (its drive-loop report, decision #21)."""
+        """Build a snapshot from a roster row, an optional recent-log tail, the
+        manager's own emitted status (its drive-loop report, decision #21), and
+        its assigned identity *color* (U9, filled in by :meth:`FleetState.apply`
+        which sees the whole fleet)."""
         return cls(
             id=agent.id,
             session_id=agent.session_id,
@@ -113,6 +118,7 @@ class ManagerSnapshot:
             started_at=agent.started_at,
             transcript=tuple(transcript),
             report=report,
+            color=color,
         )
 
     @property
@@ -317,11 +323,14 @@ class FleetState:
         logs = logs or {}
         statuses = statuses or {}
         timestamp = time.time() if now is None else now
+        keys = [agent.id or agent.session_id for agent in agents]
+        # Assign distinct, stable identity colors across the whole fleet (U9) so
+        # every renderer agrees which manager is "the amber one".
+        colors = assign_colors(keys)
         with self._lock:
             new_transcripts: dict[str, tuple[str, ...]] = {}
             managers: list[ManagerSnapshot] = []
-            for agent in agents:
-                key = agent.id or agent.session_id
+            for agent, key in zip(agents, keys):
                 incoming = logs.get(key, ())
                 merged = _merge_tail(
                     self._transcripts.get(key, ()), incoming, maxlen=self._log_lines
@@ -329,7 +338,10 @@ class FleetState:
                 new_transcripts[key] = merged
                 managers.append(
                     ManagerSnapshot.from_agent_info(
-                        agent, transcript=merged, report=statuses.get(key)
+                        agent,
+                        transcript=merged,
+                        report=statuses.get(key),
+                        color=colors.get(key),
                     )
                 )
             self._transcripts = new_transcripts
