@@ -8,6 +8,8 @@
 .phase0/worker_sandbox/
 .phase0/*.log
 .phase0/*.log.*
+.phase0/*.out
+.phase0/*.out.*
 .phase0/*.pid
 .phase0/app.pid
 
