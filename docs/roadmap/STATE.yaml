@@ -16,11 +16,11 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 2
-  next_unit: U3
+  next_unit: U4
   in_progress: null
   pending_gate: null        # when HUMAN_GATE: holds copy-pasteable steps the human must perform
   failure_count: 0
-  units_done: 2
+  units_done: 3
   units_total: 26
 
 units:
@@ -43,7 +43,7 @@ units:
     phase: 2
     title: SessionManager (track N + reconnect)
     gate: software
-    status: pending
+    status: done
     deps: [U2]
     acceptance: "Track N managers (spawn/list/stop); on startup reconnect to existing bg sessions from the daemon roster / `claude agents --json`. Tests cover reconnect-after-restart."
   - id: U4

@@ -363,6 +363,36 @@ class FleetManager:
             claude_bin=claude_bin,
         )
 
+    @classmethod
+    def from_agent_info(
+        cls,
+        agent: AgentInfo,
+        *,
+        task: Optional[str] = None,
+        claude_bin: str = "claude",
+    ) -> "FleetManager":
+        """Build a handle for an EXISTING background session from a roster row.
+
+        This is the reconnect path (U3 ``SessionManager``): after an app restart
+        the live session is rediscovered in ``claude agents --json`` and wrapped
+        back into a :class:`FleetManager` so it can be observed/controlled again.
+        Requires a background row (one with a short ``id``); raises otherwise,
+        since interactive sessions are not fleet managers.
+        """
+        if agent.id is None:
+            raise FleetManagerError(
+                "cannot reconnect a FleetManager from a row without a short id "
+                f"(session {agent.session_id!r} is not a background session)"
+            )
+        return cls(
+            session_id=agent.session_id,
+            id=agent.id,
+            name=agent.name or agent.id,
+            cwd=agent.cwd,
+            task=task,
+            claude_bin=claude_bin,
+        )
+
     @staticmethod
     def _resolve_by_short_id(
         short_id: str,

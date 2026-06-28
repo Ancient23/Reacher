@@ -8,6 +8,8 @@ CLI, dashboard and robot body all build on.
 - U2 adds :class:`FleetManager`: spawn + control of one ``claude --bg``
   background manager session (the fleet's durable substrate). See plan.md §4
   (Phase 2) and decisions #11, #13, #19.
+- U3 adds :class:`SessionManager`: tracks N managers and reconnects to existing
+  background sessions from the daemon roster on app restart.
 """
 
 from __future__ import annotations
@@ -36,6 +38,10 @@ from .manager import (
     parse_spawn_output,
     resolve_claude_bin,
 )
+from .session_manager import (
+    AgentPredicate,
+    SessionManager,
+)
 
 
 __all__ = [
@@ -61,4 +67,7 @@ __all__ = [
     "parse_agents_json",
     "resolve_claude_bin",
     "DEFAULT_PERMISSION_MODE",
+    # session manager (U3)
+    "SessionManager",
+    "AgentPredicate",
 ]
