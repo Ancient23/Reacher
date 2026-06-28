@@ -1,0 +1,33 @@
+# Example fleet config (U1). Lists the projects a manager session can be
+# pointed at plus the fleet-wide default gate policy. Tasks are given by voice
+# at runtime; this file only describes *where* work can happen and *how
+# autonomous* it is by default. Load with reachy_fleet_supervisor.fleet.load_fleet_config.
+
+[default_gate_policy]
+mode = "autonomous"            # or "gated" to pause on every gateable action
+escalate_on = ["push", "publish"]
+
+[[projects]]
+name = "reacher"
+path = "C:/Source/reacher"
+env = { REACHY_MINI_SKIP_DOTENV = "1" }
+
+  [projects.defaults]
+  run_mode = "background"
+  model = "claude-sonnet-4-6"
+
+[[projects]]
+name = "unreal"
+path = "~/Source/unreal-game"
+
+  [projects.defaults]
+  run_mode = "remote-control"
+
+  # This project overrides the fleet default and gates everything.
+  [projects.defaults.gate_policy]
+  mode = "gated"
+
+  [[projects.mcp]]
+  name = "unreal"
+  command = "uv"
+  args = ["run", "unreal-mcp"]

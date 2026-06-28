@@ -8,3 +8,4 @@ orchestrator) can read this for history without opening code or diffs. Format:
 ---
 
 <!-- entries below -->
+2026-06-27 · U1 · CONTINUE · Fleet config schema+loader (pydantic): reachy_fleet_supervisor.fleet — FleetConfig/ProjectConfig/GatePolicy/McpServerConfig + load_fleet_config (toml/json, strict). fleet.example.toml + 24 tests green. (Pre-existing unrelated failures: torch-less vision tests, 2 profile-loading tests.) Next: U2 FleetManager over `claude --bg`.
