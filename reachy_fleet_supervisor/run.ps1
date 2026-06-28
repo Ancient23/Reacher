@@ -65,16 +65,26 @@ try {
       -RedirectStandardError  (Join-Path $LogDir "daemon.err.log") `
       -WindowStyle Hidden -PassThru
 
-    # wait until the daemon's HTTP API answers
-    $ready = $false
-    for ($i = 0; $i -lt 40; $i++) {
+    # wait until the daemon's MOTOR BACKEND is ready — not just the HTTP server.
+    # /api/daemon/status returns 200 even with dead motors; require state != "error"
+    # and an empty error field (otherwise the app would hit /ws/sdk -> 403 and exit).
+    $ready = $false; $daemonErr = $null
+    for ($i = 0; $i -lt 60; $i++) {
       if ($script:DaemonProc.HasExited) { break }
-      try { if ((Invoke-WebRequest -Uri "http://127.0.0.1:8000/api/daemon/status" -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200) { $ready = $true; break } } catch {}
+      try {
+        $resp = Invoke-WebRequest -Uri "http://127.0.0.1:8000/api/daemon/status" -UseBasicParsing -TimeoutSec 3
+        if ($resp.StatusCode -eq 200) {
+          $j = $resp.Content | ConvertFrom-Json
+          if ($j.state -ne 'error' -and [string]::IsNullOrEmpty([string]$j.error)) { $ready = $true; break }
+          $daemonErr = $j.error
+        }
+      } catch {}
       Start-Sleep -Milliseconds 750
     }
     if (-not $ready) {
-      Write-Warning "$(& $ts) Daemon did not become ready (robot powered on? motors? USB?). Retrying..."
-      Stop-All; Start-Sleep 3; continue
+      $why = if ($daemonErr) { $daemonErr } else { "daemon HTTP API not reachable" }
+      Write-Warning "$(& $ts) Daemon backend NOT ready: $why  (check robot motor power / USB). Retrying..."
+      Stop-All; Start-Sleep 5; continue
     }
     Start-Sleep -Seconds 2
 
