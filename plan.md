@@ -75,15 +75,25 @@ is just a subscriber to FleetState. Nothing polls the workers directly.
   orchestration engine; Claude already is one.
 - **Realtime stays the orchestrator + voice** — it spawns / routes to / observes N managers. No
   separate Claude orchestrator brain (each manager already orchestrates).
-- **Sessions outlive the voice layer.** Top-level managers run **supervisor-backed / detached**
-  (`claude --bg`) so they keep running if the app or Reachy goes away; on restart the app
-  **reconnects** (resume by session id; `claude agents` / `logs` / `attach`; tail the JSONL
-  transcript under `~/.claude/projects/`). Each manager enables **`/remote-control`** so it's
-  observable/steerable from **claude.ai or mobile** (Max-plan OAuth) when you're away from the robot.
-- We render our own status/transcript views — from the **JSONL transcript** for detached managers
-  (Agent SDK typed events only for quick in-process one-shots). The body + web dashboard + CLI all
-  read **FleetState**; nothing polls a worker directly. Borrow seer-agent's ADW *pattern* (worktree +
-  isolated ports + state JSON) but **don't depend on it** — the supervisor stays project-agnostic.
+- **Durable substrate = background agents (`claude --bg`).** Managers run as supervisor-hosted
+  background sessions that survive the app/terminal closing and machine *sleep* (machine *shutdown*
+  stops them → they show failed but **restart from where they left off** on reattach). The app
+  **reconnects on restart** via the supervisor roster (`~/.claude/daemon/roster.json`) +
+  `claude respawn` / `--resume`. *Verified on 2.1.195.*
+- **Remote control is a SEPARATE overlay, NOT composable with `--bg`** (verified: passing both,
+  `--bg` silently wins and RC never activates). To steer a manager from **claude.ai / mobile**, run
+  it in RC **server mode** (`claude remote-control --spawn worktree --capacity N` — one long-lived
+  host for N remote sessions) or as an interactive `claude --remote-control`. RC needs a **full
+  claude.ai OAuth login** (not an API key, not a `setup-token`/`CLAUDE_CODE_OAUTH_TOKEN`), and its
+  host process must stay alive (dies on close or >~10 min network outage). So: **`--bg` for fleet
+  durability + observability; RC as an optional human-steering overlay** — different processes.
+- **Observability is non-interactive:** `claude agents --json` (per session: `id`, `sessionId`,
+  `cwd`, `kind`, `name`, `state` ∈ working/blocked/done/failed/stopped, `waitingFor`) is the
+  **FleetState source**; `claude logs <id>` for recent output; deep history in the JSONL transcript
+  under `~/.claude/projects/`. Background agents **auto-isolate into `.claude/worktrees/`** (we don't
+  manage worktrees); `/loop` ralph sessions are first-class rows; parallel subagents surface a
+  `done/total` count. Body + dashboard + CLI all read FleetState; nothing polls a worker directly.
+  Borrow seer-agent's ADW *pattern* but **don't depend on it** — stay project-agnostic.
 
 ## 4. Phased build
 
@@ -96,14 +106,14 @@ is just a subscriber to FleetState. Nothing polls the workers directly.
     single worker). It does NOT implement orchestration — each manager orchestrates its own
     subagents / Workflows / ralph-loops natively. Per-agent **identity** (name + color) so you can
     refer to one by voice ("how's the Unreal one doing?"); one git **worktree per manager**.
-  - **Persistence (promoted from Phase 4 — now core):** managers run **supervisor-backed/detached**
-    (`claude --bg`) and the app **reconnects on restart** (resume by session id; `claude
-    agents`/`logs`/`attach`; tail the JSONL transcript). They survive the voice layer going away.
-    *(Verify exact flags/version on the box; pure in-process SDK survival across app death is
-    unconfirmed → prefer `--bg`/supervisor.)*
-  - **`/remote-control` per manager** — observe/steer each top-level session from **claude.ai or
-    mobile** (Max-plan OAuth, no API key), enabled at spawn. A remote control plane for when you're
-    away from the robot.
+  - **Persistence (promoted to core; verified on 2.1.195):** managers run as `claude --bg`
+    supervisor-hosted background agents — survive app/terminal close + sleep; app **reconnects on
+    restart** via the daemon roster + `claude respawn`/`--resume`. FleetState polls `claude agents
+    --json`; output via `claude logs <id>`. Auto-worktree isolation under `.claude/worktrees/`.
+  - **Remote control (optional overlay):** steer a manager from **claude.ai/mobile** via RC
+    **server mode** or an interactive `claude --remote-control` — **not** combinable with `--bg`
+    (verified), needs full claude.ai OAuth, host must stay alive. Decide per deployment whether the
+    fleet runs bg-durable, RC-steerable, or a mix.
   - `FleetState` (single source of truth, pub/sub) aggregates each manager's (possibly nested)
     events. **Read-only web dashboard** (FastAPI on `settings_app`, browser-reachable) + a **headless
     `fleet` CLI** render it; the **body** renders it too. Per agent: status, current tool, last
@@ -191,11 +201,15 @@ is just a subscriber to FleetState. Nothing polls the workers directly.
     **ralph/drive loop** (cf. `drive-loop` skill): fresh-context subagent per iteration, sentinel-
     gated, durable committed git state. We delegate orchestration to Claude rather than building a
     scheduler. No separate Claude orchestrator brain — **Realtime stays the host**.
-16. **Detached survival + remote control** → managers spawn **`claude --bg`** (supervisor-backed,
-    survives app/voice death) with **`/remote-control`** enabled (steer from claude.ai/mobile,
-    Max OAuth). Both are CLI-only → confirmed reason to NOT use pure in-process SDK for managers.
-    *To verify on the installed version: exact `--bg`/`--remote-control` flags and non-interactive
-    enablement.*
+16. **Detached survival vs remote control — they DON'T compose (verified 2.1.195):** `claude --bg`
+    gives supervisor-hosted durability + non-interactive observability (`agents --json`, `logs`) +
+    reconnect (roster + `respawn`/`--resume`); `--remote-control` (server or interactive) gives
+    claude.ai/mobile steering but is a separate, must-stay-alive process needing full claude.ai
+    OAuth. Passing both → `--bg` silently wins, RC off. So **bg = fleet backbone; RC = optional
+    human-steering overlay (likely server mode)**. Both are CLI features → managers are NOT pure
+    in-process SDK clients. *Open: non-interactive *steering* of a running bg session from the shell
+    isn't cleanly exposed (reply via agent-view peek or `claude attach`) — verify `claude --resume
+    <id> -p` injection.*
 17. **Gate → voice escalation** → the ralph loop's **`HUMAN_GATE` sentinel** is the escalation
     channel: Reachy speaks the gate; the spoken answer resumes the loop. (Implements the earlier
     `ask_human` idea concretely.)
