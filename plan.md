@@ -115,9 +115,11 @@ is just a subscriber to FleetState. Nothing polls the workers directly.
     (verified), needs full claude.ai OAuth, host must stay alive. Decide per deployment whether the
     fleet runs bg-durable, RC-steerable, or a mix.
   - `FleetState` (single source of truth, pub/sub) aggregates each manager's (possibly nested)
-    events. **Read-only web dashboard** (FastAPI on `settings_app`, browser-reachable) + a **headless
-    `fleet` CLI** render it; the **body** renders it too. Per agent: status, current tool, last
-    spoken line, transcript ring buffer; a 2–4 card grid.
+    events from `claude agents --json` (+ `logs`) **and each manager's own emitted status** (its
+    drive-loop report line + a small `status.json`/journal it writes to its job dir or repo — see
+    decision #21). **Read-only web dashboard** (FastAPI on `settings_app`, browser-reachable) + a
+    **headless `fleet` CLI** render it; the **body** renders it too. Per agent: status, current tool,
+    last spoken line, transcript ring buffer; a 2–4 card grid.
   - **Hybrid worker setup:** a `fleet` config lists available projects (`path`, `env`, `mcp[]`);
     tasks given by **voice** at runtime.
   - Design target: **2–4 concurrent managers** (Max-plan rate limits; body can distinctly signal each).
@@ -238,6 +240,13 @@ is just a subscriber to FleetState. Nothing polls the workers directly.
     `remote-control`, gates) and can explain what they mean and **how to ask for them, with spoken
     examples**, whenever the user wants help. Implement in the persona `instructions.txt` + the
     fleet-spawn tool schema (the generalized `ask_claude_code`); mirror in the fleet skill (#18).
+21. **Status convention — Reachy reads FleetState, doesn't interrupt agents.** "How's X doing?" is
+    answered by reading **FleetState** (`claude agents --json` state + `waitingFor`, `claude logs
+    <id>`, and each manager's own drive-loop report line + a small `status.json`/journal it writes to
+    its job dir or repo) — never by interrupting the agent, so it costs no agent turn and works the
+    same in both run modes. Each manager therefore **emits status to a known place every iteration**;
+    Reachy/dashboard/CLI all read it. Two-way follow-up ("why did you do X?") is *steering*: native in
+    `remote-control`, the #16 to-verify path (`claude --resume <id> -p`) in `background`.
 
 ## 7. How to run
 
