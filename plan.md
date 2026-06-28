@@ -50,12 +50,40 @@ You ⇄ (robot mic/speaker) ⇄  OpenAI Realtime  ──── persona + emotion
   and `ask_claude_code.py`.
 - `claude_brain.py` = `WorkerSession` (persistent `ClaudeSDKClient`).
 
-### Target architecture (Phase 2/3 — the fleet)
-Generalize `ask_claude_code` (one worker) → a **SessionManager** of N worktree-isolated
-`WorkerSession`s + a **FleetState** the Realtime host can query/steer, with the body signalling
-which session needs attention (body-yaw arc, antenna status, approval/clarification by voice).
-Borrow seer-agent's ADW *pattern* (worktree + isolated ports + state JSON) but **don't depend on
-it** — the supervisor must be project-agnostic.
+### Target architecture (Phase 2+ — the fleet)
+**One source of truth, many renderers.** A `SessionManager` holds N worktree-isolated
+`WorkerSession`s; each streams `WorkerEvent`s into a single **`FleetState`** over a pub/sub event
+bus. Everything that *shows* the fleet — the robot body, the web dashboard, a future terminal TUI —
+is just a subscriber to FleetState. Nothing polls the workers directly.
+
+```
+         ┌───────────────── FleetState (pub/sub) ─────────────────┐
+         │   worker[reacher]    worker[unreal]    worker[…]        │
+         └────────▲────────────────────┬──────────────────┬───────┘
+    WorkerEvents  │                     │  subscribers     │
+   ┌──────────────┴───┐      ┌──────────▼─────┐   ┌────────▼───────┐   ┌─────────────┐
+   │ SessionManager   │      │  Reachy body   │   │  Web dashboard │   │ (later) TUI │
+   │  N WorkerSessions│      │  (attention)   │   │  FastAPI       │   │             │
+   └──────────────────┘      └────────────────┘   └────────────────┘   └─────────────┘
+```
+
+- Each **fleet manager is a full Claude Code session** (Max plan) that orchestrates its OWN team —
+  subagents, dynamic **Workflows**, and **ralph/drive loops** (cf. the `drive-loop` skill) that
+  drive a goal to completion: fresh-context subagent per iteration, sentinel-gated
+  (`CONTINUE | HUMAN_GATE | COMPLETE | FAILED`). **Durability lives in committed git state, not the
+  process** → the loop and its workers are disposable and resumable. We do NOT build an
+  orchestration engine; Claude already is one.
+- **Realtime stays the orchestrator + voice** — it spawns / routes to / observes N managers. No
+  separate Claude orchestrator brain (each manager already orchestrates).
+- **Sessions outlive the voice layer.** Top-level managers run **supervisor-backed / detached**
+  (`claude --bg`) so they keep running if the app or Reachy goes away; on restart the app
+  **reconnects** (resume by session id; `claude agents` / `logs` / `attach`; tail the JSONL
+  transcript under `~/.claude/projects/`). Each manager enables **`/remote-control`** so it's
+  observable/steerable from **claude.ai or mobile** (Max-plan OAuth) when you're away from the robot.
+- We render our own status/transcript views — from the **JSONL transcript** for detached managers
+  (Agent SDK typed events only for quick in-process one-shots). The body + web dashboard + CLI all
+  read **FleetState**; nothing polls a worker directly. Borrow seer-agent's ADW *pattern* (worktree +
+  isolated ports + state JSON) but **don't depend on it** — the supervisor stays project-agnostic.
 
 ## 4. Phased build
 
@@ -63,13 +91,56 @@ it** — the supervisor must be project-agnostic.
   Agent SDK on the Max plan all validated on hardware.
 - **Phase 1 — Single-session assistant ✅ (shipped & committed)** OpenAI Realtime voice +
   personality + emotions/dances + `ask_claude_code` → Claude Code does real work, speaks results.
-- **Phase 2 — Fleet abstraction.** SessionManager + FleetState + event bus; one→N worktree
-  workers; status-driven body motion.
-- **Phase 3 — N sessions + steering.** Realtime host observes/steers many workers; per-target
-  worker environments (seer-agent → WSL2; Unreal/RoadRage → Windows); plan-gated approval/
-  clarification by voice.
-- **Phase 4 — Polish.** Rate-limit handling, robustness, profiles, and a 5090-native local mode
-  (CUDA Whisper + neural TTS) as an OpenAI-free option.
+- **Phase 2 — Fleet core + observability + persistence — NEXT.**
+  - `SessionManager` = **track + route N persistent manager sessions** (generalize the existing
+    single worker). It does NOT implement orchestration — each manager orchestrates its own
+    subagents / Workflows / ralph-loops natively. Per-agent **identity** (name + color) so you can
+    refer to one by voice ("how's the Unreal one doing?"); one git **worktree per manager**.
+  - **Persistence (promoted from Phase 4 — now core):** managers run **supervisor-backed/detached**
+    (`claude --bg`) and the app **reconnects on restart** (resume by session id; `claude
+    agents`/`logs`/`attach`; tail the JSONL transcript). They survive the voice layer going away.
+    *(Verify exact flags/version on the box; pure in-process SDK survival across app death is
+    unconfirmed → prefer `--bg`/supervisor.)*
+  - **`/remote-control` per manager** — observe/steer each top-level session from **claude.ai or
+    mobile** (Max-plan OAuth, no API key), enabled at spawn. A remote control plane for when you're
+    away from the robot.
+  - `FleetState` (single source of truth, pub/sub) aggregates each manager's (possibly nested)
+    events. **Read-only web dashboard** (FastAPI on `settings_app`, browser-reachable) + a **headless
+    `fleet` CLI** render it; the **body** renders it too. Per agent: status, current tool, last
+    spoken line, transcript ring buffer; a 2–4 card grid.
+  - **Hybrid worker setup:** a `fleet` config lists available projects (`path`, `env`, `mcp[]`);
+    tasks given by **voice** at runtime.
+  - Design target: **2–4 concurrent managers** (Max-plan rate limits; body can distinctly signal each).
+- **Phase 3 — Steering + plan-gated autonomy.**
+  - Dashboard + CLI become **interactive**: approve a gate, send a message, pause/resume, spawn/kill,
+    reassign — **voice, screen, and claude.ai are surfaces for the same actions**.
+  - **Plan-gated autonomy via the ralph/drive contract:** a manager loops a `/drive-*` command toward
+    a goal; its **`HUMAN_GATE` sentinel _is_ the gate → voice escalation** (Reachy relays it verbatim;
+    your spoken answer resumes the loop). `COMPLETE` ends it; `FAILED`×3 stops; usage-limit → schedule
+    a wakeup and resume. Durable committed state makes a successor resume seamlessly.
+  - Optional **written plan file** per manager (the drive contract's committed state files).
+  - Autonomous by default; a **default gate policy lives in the fleet config**, overridable per
+    worker/project.
+  - Worker model `{ project_path, environment, mcp_servers, plan, gate_policy }`. **MCP-general:** if
+    Claude can drive a tool via MCP, a manager can use it — covers the **Unreal 5.8 MCP**, browser
+    MCPs, etc. Example repos are *test targets*, not plan dependencies.
+- **Phase 4 — Reachy vision + local backends.**
+  - **Vision (both directions):** a **worker-callable tool** ("look at what I built" — screen
+    capture for digital work, robot camera for physical) that feeds an assessment back into the
+    worker's loop; **and** a **supervisor observer** (Reachy proactively glances and comments).
+    Meta-dev loop: an agent edits a Reachy app → it runs → Reachy *sees* the result → assessment →
+    back to the agent. Reuse `reachy_claude_vision` (`.phase0/vision_ref/`).
+  - **Pluggable coding backend:** alongside Claude Code (Max plan), allow a manager to run a **local
+    model via Ollama** (option 1: **Claude Code routed to a local model**, keeping the same agent
+    loop/tooling — likely via a base-URL router; offline / free / no rate limits). Chosen per worker.
+  - **5090 local voice mode:** CUDA Whisper + neural TTS (Kokoro/XTTS) — an OpenAI-free brain.
+  - Remaining rate-limit/robustness hardening (persistence groundwork already shipped in Phase 2).
+- **Phase 5 — Customization + share.**
+  - User-configurable keys, models, projects, personas; UI polish.
+  - The **OpenAI-free voice mode + Ollama coding backend** become the low-barrier path for people
+    without a Realtime key or Max plan.
+  - Publish as a shareable **Reachy Mini app on Hugging Face** (like the vision ref). Sort licensing
+    (Pollen base + our additions) and secrets handling for a public app.
 
 ## 5. Risks & status
 
@@ -92,6 +163,46 @@ it** — the supervisor must be project-agnostic.
 4. **On exit** → workers stop with the app for now (detached fleet survival is a Phase 2/3 item).
 5. **Host OS** → **Windows-native**.
 6. **Publish** → committed to a **private GitHub repo** (`Ancient23/Reacher`); not on HF.
+
+### Fleet design decisions (brainstormed 2026-06-27)
+7. **Observability surface** → **web dashboard first** (FastAPI on `settings_app`, browser-reachable
+   so the 5090 can be watched from a laptop). Terminal TUI is a cheap follow-on over the same
+   FleetState. Both render FleetState; the robot body is a third renderer.
+8. **Worker transport** → **long-running top-level managers are supervisor-backed/detached**
+   (`claude --bg`), NOT pure in-process SDK clients — that's what gives detached survival +
+   `/remote-control`, both CLI-only features. We render status from the **JSONL transcript**
+   (`~/.claude/projects/`) + `claude agents`/`logs`. The in-process Agent SDK (`ClaudeSDKClient`)
+   stays fine for quick one-shots. (Optional later: OTEL export.)
+9. **Vision (Phase 4)** → **both** a worker-callable verification tool *and* a proactive supervisor
+   observer.
+10. **Fleet scale** → design around **2–4 concurrent agents**.
+11. **Worker setup** → **hybrid**: a fleet config lists projects (`path`, `env`, `mcp[]`); simple
+    tasks by voice, with an optional **written plan file** per worker for plan-gated autonomy.
+12. **Persistence** → **promoted to Phase 2 core** (was deferred): managers run detached and the app
+    **reconnects on restart**. Justified because top-level managers are now full autonomous ralph-loop
+    orchestrators — they must survive the voice layer going away, not die with it.
+13. **Gating** → **fully autonomous by default**, with a default policy in the fleet config that's
+    **overridable per worker/project**.
+14. **Coding backend** → **pluggable**: Claude Code on the Max plan (default) *or* a **local model
+    via Ollama** (offline / free / no rate limits), selectable per worker. **Option 1 chosen:** route
+    Claude Code itself at a local model (keep the agent loop/tooling/event stream; only the brain
+    changes) rather than a native Ollama agent. Mirrors the OpenAI-Realtime ↔ local-Whisper duality.
+15. **Manager autonomy model** → each top-level manager is a **full orchestrator** running a
+    **ralph/drive loop** (cf. `drive-loop` skill): fresh-context subagent per iteration, sentinel-
+    gated, durable committed git state. We delegate orchestration to Claude rather than building a
+    scheduler. No separate Claude orchestrator brain — **Realtime stays the host**.
+16. **Detached survival + remote control** → managers spawn **`claude --bg`** (supervisor-backed,
+    survives app/voice death) with **`/remote-control`** enabled (steer from claude.ai/mobile,
+    Max OAuth). Both are CLI-only → confirmed reason to NOT use pure in-process SDK for managers.
+    *To verify on the installed version: exact `--bg`/`--remote-control` flags and non-interactive
+    enablement.*
+17. **Gate → voice escalation** → the ralph loop's **`HUMAN_GATE` sentinel** is the escalation
+    channel: Reachy speaks the gate; the spoken answer resumes the loop. (Implements the earlier
+    `ask_human` idea concretely.)
+18. **Fleet skill** → a `drive-loop` variant installed into manager sessions teaching the fleet
+    conventions: orchestrate via subagents/Workflows, keep spoken replies short, escalate
+    `HUMAN_GATE` by voice. Doubles as our headless dev/test harness. Build it once the `fleet` CLI
+    surface is real.
 
 ## 7. How to run
 
