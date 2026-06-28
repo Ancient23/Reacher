@@ -1,0 +1,215 @@
+# Reachy Fleet Supervisor — autonomous build roadmap (drive contract state)
+# Ground truth for /drive-loop via .claude/commands/drive-roadmap.md.
+# The orchestrator reads `status`; each worker does ONE unit, then updates this file + JOURNAL.md.
+# Design detail for every unit lives in plan.md (§4 phases, §6 decisions #7–21).
+
+meta:
+  project: Reachy Fleet Supervisor
+  design_doc: plan.md
+  contract: .claude/commands/drive-roadmap.md
+  journal: docs/roadmap/JOURNAL.md
+  sentinel_prefix: ROADMAP_STATE   # final line: ROADMAP_STATE: CONTINUE|HUMAN_GATE|COMPLETE|FAILED
+
+# gate types:
+#   software  — fully autonomous; write tests + run them (may spawn REAL trivial `claude --bg`).
+#   hardware  — needs the physical robot (motion / voice / vision); implement then HUMAN_GATE.
+#   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
+status:
+  current_phase: 2
+  next_unit: U1
+  in_progress: null
+  pending_gate: null        # when HUMAN_GATE: holds copy-pasteable steps the human must perform
+  failure_count: 0
+  units_done: 0
+  units_total: 26
+
+units:
+  # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
+  - id: U1
+    phase: 2
+    title: Fleet config schema + loader
+    gate: software
+    status: pending
+    deps: []
+    acceptance: "A `fleet` config (toml/json) lists projects {name, path, env, mcp[], defaults} and a default gate policy; typed loader + validation + tests."
+  - id: U2
+    phase: 2
+    title: FleetManager over `claude --bg`
+    gate: software
+    status: pending
+    deps: [U1]
+    acceptance: "Spawn a manager as a background agent (claude --bg --name --session-id --permission-mode … task), capture short id + sessionId; stop/rm; tests spawn a REAL trivial bg session, assert it appears in `claude agents --json`, then clean it up."
+  - id: U3
+    phase: 2
+    title: SessionManager (track N + reconnect)
+    gate: software
+    status: pending
+    deps: [U2]
+    acceptance: "Track N managers (spawn/list/stop); on startup reconnect to existing bg sessions from the daemon roster / `claude agents --json`. Tests cover reconnect-after-restart."
+  - id: U4
+    phase: 2
+    title: FleetState model + poller (pub/sub)
+    gate: software
+    status: pending
+    deps: [U3]
+    acceptance: "FleetState aggregates per-manager state by polling `claude agents --json` (+ logs); pub/sub so subscribers get updates; tests with fake + real bg sessions."
+  - id: U5
+    phase: 2
+    title: Status convention (manager emits, fleet reads)  # decision #21
+    gate: software
+    status: pending
+    deps: [U4]
+    acceptance: "Each manager writes a small status.json/journal (drive-loop report line) to a known place; FleetState merges it. Reachy/dashboard/CLI read status without interrupting the agent. Tested."
+  - id: U6
+    phase: 2
+    title: Headless `fleet` CLI
+    gate: software
+    status: pending
+    deps: [U4]
+    acceptance: "`fleet start|spawn|status|logs|stop` over SessionManager+FleetState — the headless dev/test harness. Tests drive it end-to-end against real trivial bg sessions."
+  - id: U7
+    phase: 2
+    title: Read-only web dashboard
+    gate: software
+    status: pending
+    deps: [U4]
+    acceptance: "FastAPI route on settings_app serving a 2–4 card grid rendering FleetState (status, tool, last line, transcript ring buffer) + a JSON poll endpoint; tests serve + assert HTTP/JSON. (Visual polish = optional light human check.)"
+  - id: U8
+    phase: 2
+    title: Body renders FleetState
+    gate: hardware
+    status: pending
+    deps: [U4]
+    acceptance: "Map fleet status → head/antenna signals (body yaw toward the manager needing attention; antenna = state). HUMAN_GATE: human powers robot (rear USB-C) and confirms the body signals the right manager."
+  - id: U9
+    phase: 2
+    title: Per-agent identity (name/color) + 2–4 wiring
+    gate: software
+    status: pending
+    deps: [U4]
+    acceptance: "Stable name + color per manager surfaced through FleetState/CLI/dashboard; designed for 2–4 concurrent. Tested."
+  - id: U10
+    phase: 2
+    title: Phase 2 integration + docs
+    gate: hardware
+    status: pending
+    deps: [U5, U6, U7, U8, U9]
+    acceptance: "Software integration test of the whole fleet core (autonomous). End-to-end with the robot (talk → spawn → observe on body + dashboard) = HUMAN_GATE. Update README/plan status."
+
+  # ---------------- Phase 3 — Steering + plan-gated autonomy ----------------
+  - id: U11
+    phase: 3
+    title: run_mode knob (background | remote-control)  # decision #19
+    gate: software
+    status: pending
+    deps: [U3]
+    acceptance: "Manager model gains run_mode; background path fully wired+tested. remote-control spawn path implemented (claude --remote-control / server mode); RC live-connect verification = HUMAN_GATE (needs full claude.ai OAuth)."
+  - id: U12
+    phase: 3
+    title: Interactive controls (CLI + dashboard)
+    gate: software
+    status: pending
+    deps: [U6, U7]
+    acceptance: "approve gate / send message / pause-resume / spawn-kill / reassign. NB verify the non-interactive steering path for bg sessions (claude --resume <id> -p vs agent-view) — decision #16 open item; document the chosen mechanism. Tested."
+  - id: U13
+    phase: 3
+    title: Managers run ralph/drive loops  # decision #15
+    gate: software
+    status: pending
+    deps: [U5]
+    acceptance: "A manager can drive a /drive-* loop on its target repo; its HUMAN_GATE sentinel flows into FleetState. Integration tested (a manager driving a trivial sample repo)."
+  - id: U14
+    phase: 3
+    title: Gate policy (config default + per-worker override)  # decision #13
+    gate: software
+    status: pending
+    deps: [U1, U13]
+    acceptance: "Default gate policy in fleet config, overridable per worker/project; classification (autonomous vs escalate). Tested."
+  - id: U15
+    phase: 3
+    title: Gate → voice escalation  # decision #17
+    gate: hardware
+    status: pending
+    deps: [U13, U14]
+    acceptance: "HUMAN_GATE surfaces to the Realtime host and is spoken; the spoken answer resumes the loop. HUMAN_GATE: confirm by voice on the robot."
+  - id: U16
+    phase: 3
+    title: Written plan file per manager
+    gate: software
+    status: pending
+    deps: [U13]
+    acceptance: "A manager can be handed a plan.md-style file (task + gates = the drive contract's committed state). Tested."
+  - id: U17
+    phase: 3
+    title: Voice interaction contract  # decision #20
+    gate: hardware
+    status: pending
+    deps: [U11, U14]
+    acceptance: "Persona + fleet-spawn tool: confirm task+location+run_mode (+non-default gates) by voice before kickoff ('just do it' skips); explain options + how to ask, with spoken examples. HUMAN_GATE: confirm on the robot."
+  - id: U18
+    phase: 3
+    title: MCP-general per-worker MCP config
+    gate: software
+    status: pending
+    deps: [U1, U2]
+    acceptance: "Per-worker MCP servers wired through spawn (--mcp-config); a manager can drive an MCP-backed target (e.g. Unreal 5.8 MCP as a test target — config only, no hard dependency). Tested."
+
+  # ---------------- Phase 4 — Vision + local backends ----------------
+  - id: U19
+    phase: 4
+    title: Pluggable coding backend (Ollama local model)  # decision #14, option 1
+    gate: software
+    status: pending
+    deps: [U2]
+    acceptance: "Per-worker backend selection: Claude Code (Max) or Claude Code routed at a local Ollama model via ANTHROPIC_BASE_URL in the project's .claude/settings.json env (bg sessions don't inherit it from the shell, v2.1.174+). Config + tests; if no local Ollama present → HUMAN_GATE to set it up (ideally on the 5090)."
+  - id: U20
+    phase: 4
+    title: Vision — worker-callable tool  # decision #9
+    gate: hardware
+    status: pending
+    deps: [U13]
+    acceptance: "A worker tool 'look at what I built': screen capture (digital) or robot camera (physical) → assessment back into the loop. Screen-capture path software-testable; robot-camera path = HUMAN_GATE. Reuse .phase0/vision_ref."
+  - id: U21
+    phase: 4
+    title: Vision — supervisor observer
+    gate: hardware
+    status: pending
+    deps: [U20]
+    acceptance: "Reachy proactively glances + comments on fleet work. HUMAN_GATE: confirm on the robot."
+  - id: U22
+    phase: 4
+    title: 5090 local voice mode (CUDA Whisper + neural TTS)
+    gate: hardware
+    status: pending
+    deps: []
+    acceptance: "OpenAI-free brain (CUDA Whisper + Kokoro/XTTS) as a fallback. HUMAN_GATE: needs the 5090 + audio hardware to verify."
+  - id: U23
+    phase: 4
+    title: Rate-limit + robustness hardening
+    gate: software
+    status: pending
+    deps: [U3]
+    acceptance: "Backoff/handling for N managers sharing one Max pool; recovery paths. Tested."
+
+  # ---------------- Phase 5 — Customization + share ----------------
+  - id: U24
+    phase: 5
+    title: Customization (keys/models/projects/personas) + UI polish
+    gate: software
+    status: pending
+    deps: [U7, U11]
+    acceptance: "User-configurable keys, models, projects, personas; dashboard polish. Tested (visual = light human check)."
+  - id: U25
+    phase: 5
+    title: Fleet skill (drive-loop variant for managers)  # decision #18
+    gate: software
+    status: pending
+    deps: [U13]
+    acceptance: "A skill installed into manager sessions: orchestrate via subagents/Workflows, short spoken replies, escalate HUMAN_GATE by voice. Tested headless."
+  - id: U26
+    phase: 5
+    title: Package + publish as a Reachy Mini app on Hugging Face
+    gate: approval
+    status: pending
+    deps: [U24, U25]
+    acceptance: "Package the app; sort licensing (Pollen base + additions) + secrets handling. Implement up to the publish step, then HUMAN_GATE for explicit go-ahead. NEVER publish autonomously."
