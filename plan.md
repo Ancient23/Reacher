@@ -131,7 +131,11 @@ is just a subscriber to FleetState. Nothing polls the workers directly.
   - Optional **written plan file** per manager (the drive contract's committed state files).
   - Autonomous by default; a **default gate policy lives in the fleet config**, overridable per
     worker/project.
-  - Worker model `{ project_path, environment, mcp_servers, plan, gate_policy }`. **MCP-general:** if
+  - Worker model `{ project_path, environment, mcp_servers, plan, gate_policy, run_mode }` where
+    **`run_mode` = `background` (default) | `remote-control`** — see decision #19; set by voice per
+    task ("…in the background, give me updates" vs "…as a remote-control session I can watch from my
+    phone"). Run-mode (how it runs) is independent of the manager's work pattern (what it does).
+    **MCP-general:** if
     Claude can drive a tool via MCP, a manager can use it — covers the **Unreal 5.8 MCP**, browser
     MCPs, etc. Example repos are *test targets*, not plan dependencies.
 - **Phase 4 — Reachy vision + local backends.**
@@ -217,6 +221,23 @@ is just a subscriber to FleetState. Nothing polls the workers directly.
     conventions: orchestrate via subagents/Workflows, keep spoken replies short, escalate
     `HUMAN_GATE` by voice. Doubles as our headless dev/test harness. Build it once the `fleet` CLI
     surface is real.
+19. **Per-manager `run_mode` (resolves the bg-vs-RC tension from #16):** each manager runs in ONE of
+    two modes, chosen by voice per task — they can't be combined on one session (verified):
+    • **`background`** (default) → `claude --bg`: supervisor-durable, survives sleep/restart, observed
+      via `agents --json`, **steered by Reachy's voice** (updates spoken; gates escalated). No
+      claude.ai control. • **`remote-control`** → `claude --remote-control` (or server mode) kept
+      alive by the self-healing launcher (+ ralph committed-state = effectively resumable); **watch/
+      steer from claude.ai/mobile**. "All background," "one phone-steerable," or any mix all fall out
+      of this single knob. Run-mode is **orthogonal** to the manager's work pattern (single goal /
+      dynamic workflow loop / ralph loop / subagent team).
+20. **Voice interaction contract for launching coding jobs (persona behavior):**
+    (a) **Confirm before kickoff** — when asked to code, Reachy reads back the resolved settings
+    (task summary + `location` + `run_mode` + any non-default gate policy) and waits for a spoken OK
+    before spawning the manager; honor a quick "just do it" to skip the readback.
+    (b) **Explain on request** — Reachy knows the available options (task, location, `background` vs
+    `remote-control`, gates) and can explain what they mean and **how to ask for them, with spoken
+    examples**, whenever the user wants help. Implement in the persona `instructions.txt` + the
+    fleet-spawn tool schema (the generalized `ask_claude_code`); mirror in the fleet skill (#18).
 
 ## 7. How to run
 
