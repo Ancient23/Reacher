@@ -16,11 +16,11 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 2
-  next_unit: U5
-  in_progress: U5
+  next_unit: U6
+  in_progress: null
   pending_gate: null        # when HUMAN_GATE: holds copy-pasteable steps the human must perform
   failure_count: 0
-  units_done: 4
+  units_done: 5
   units_total: 26
 
 units:
@@ -57,7 +57,7 @@ units:
     phase: 2
     title: Status convention (manager emits, fleet reads)  # decision #21
     gate: software
-    status: pending
+    status: done
     deps: [U4]
     acceptance: "Each manager writes a small status.json/journal (drive-loop report line) to a known place; FleetState merges it. Reachy/dashboard/CLI read status without interrupting the agent. Tested."
   - id: U6

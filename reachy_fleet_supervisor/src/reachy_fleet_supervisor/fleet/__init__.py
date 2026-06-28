@@ -13,6 +13,9 @@ CLI, dashboard and robot body all build on.
 - U4 adds :class:`FleetState` (single source of truth, pub/sub) and
   :class:`FleetPoller`: aggregate per-manager state by polling
   ``claude agents --json`` (+ logs) and notify subscribers on change.
+- U5 adds the *status convention* (:class:`ManagerStatus`, :func:`write_status`,
+  :func:`read_status`): each manager emits its own drive-loop report to a known
+  place and FleetState merges it — read status, never interrupt (decision #21).
 """
 
 from __future__ import annotations
@@ -56,6 +59,24 @@ from .state import (
     Subscriber,
     tail_logs,
 )
+from .status import (
+    ATTENTION_SENTINELS,
+    SENTINEL_COMPLETE,
+    SENTINEL_CONTINUE,
+    SENTINEL_FAILED,
+    SENTINEL_HUMAN_GATE,
+    SENTINEL_RUNNING,
+    STATUS_DIR_ENV,
+    STATUS_FILENAME,
+    ManagerStatus,
+    default_status_dir,
+    parse_sentinel,
+    read_status,
+    read_status_for,
+    read_statuses_for_agents,
+    status_path_for,
+    write_status,
+)
 
 
 __all__ = [
@@ -94,4 +115,21 @@ __all__ = [
     "ATTENTION_STATES",
     "DEFAULT_LOG_LINES",
     "DEFAULT_POLL_INTERVAL",
+    # status convention (U5)
+    "ManagerStatus",
+    "write_status",
+    "read_status",
+    "read_status_for",
+    "read_statuses_for_agents",
+    "status_path_for",
+    "default_status_dir",
+    "parse_sentinel",
+    "STATUS_FILENAME",
+    "STATUS_DIR_ENV",
+    "ATTENTION_SENTINELS",
+    "SENTINEL_RUNNING",
+    "SENTINEL_CONTINUE",
+    "SENTINEL_HUMAN_GATE",
+    "SENTINEL_COMPLETE",
+    "SENTINEL_FAILED",
 ]

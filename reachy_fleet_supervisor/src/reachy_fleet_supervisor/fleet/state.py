@@ -40,6 +40,10 @@ from .manager import (
     _run_claude,
     list_agents,
 )
+from .status import (
+    ManagerStatus,
+    read_statuses_for_agents,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -84,12 +88,18 @@ class ManagerSnapshot:
     pid: Optional[int] = None
     started_at: Optional[int] = None
     transcript: tuple[str, ...] = ()
+    report: Optional[ManagerStatus] = None
 
     @classmethod
     def from_agent_info(
-        cls, agent: AgentInfo, *, transcript: Sequence[str] = ()
+        cls,
+        agent: AgentInfo,
+        *,
+        transcript: Sequence[str] = (),
+        report: Optional[ManagerStatus] = None,
     ) -> "ManagerSnapshot":
-        """Build a snapshot from a roster row plus an optional recent-log tail."""
+        """Build a snapshot from a roster row, an optional recent-log tail, and
+        the manager's own emitted status (its drive-loop report, decision #21)."""
         return cls(
             id=agent.id,
             session_id=agent.session_id,
@@ -102,6 +112,7 @@ class ManagerSnapshot:
             pid=agent.pid,
             started_at=agent.started_at,
             transcript=tuple(transcript),
+            report=report,
         )
 
     @property
@@ -120,8 +131,22 @@ class ManagerSnapshot:
         return self.transcript[-1] if self.transcript else None
 
     @property
+    def headline(self) -> Optional[str]:
+        """Best one-line summary: the manager's emitted report, else last log line.
+
+        Renderers (body/dashboard/CLI) prefer the manager's own self-reported
+        summary (decision #21) and fall back to the raw transcript tail.
+        """
+        if self.report is not None and self.report.summary:
+            return self.report.summary
+        return self.last_line
+
+    @property
     def needs_attention(self) -> bool:
-        """True if this manager is blocked/failed or waiting on a human gate."""
+        """True if blocked/failed/waiting on a gate — from the roster row OR the
+        manager's own emitted status (a HUMAN_GATE/FAILED report)."""
+        if self.report is not None and self.report.needs_attention:
+            return True
         return bool(self.waiting_for) or (self.state in ATTENTION_STATES)
 
 
@@ -277,16 +302,20 @@ class FleetState:
         agents: Sequence[AgentInfo],
         *,
         logs: Optional[dict[str, Sequence[str]]] = None,
+        statuses: Optional[dict[str, ManagerStatus]] = None,
         now: Optional[float] = None,
     ) -> FleetSnapshot:
         """Fold a fresh poll into the state and (if changed) notify subscribers.
 
         *agents* are the rows from ``claude agents --json``; *logs* optionally
         maps a manager's lookup key (short id, falling back to session id) to a
-        recent-log tail to merge into its transcript ring buffer. Returns the new
-        snapshot. Transcripts of managers no longer present are dropped.
+        recent-log tail to merge into its transcript ring buffer; *statuses* maps
+        that same key to the manager's own emitted :class:`ManagerStatus` (its
+        drive-loop report, decision #21). Returns the new snapshot. Transcripts
+        of managers no longer present are dropped.
         """
         logs = logs or {}
+        statuses = statuses or {}
         timestamp = time.time() if now is None else now
         with self._lock:
             new_transcripts: dict[str, tuple[str, ...]] = {}
@@ -299,7 +328,9 @@ class FleetState:
                 )
                 new_transcripts[key] = merged
                 managers.append(
-                    ManagerSnapshot.from_agent_info(agent, transcript=merged)
+                    ManagerSnapshot.from_agent_info(
+                        agent, transcript=merged, report=statuses.get(key)
+                    )
                 )
             self._transcripts = new_transcripts
             new_snapshot = FleetSnapshot(managers=tuple(managers), updated_at=timestamp)
@@ -366,8 +397,12 @@ class FleetPoller:
     log_lines: int = 40
     predicate: Optional[AgentPredicate] = None
     claude_bin: str = "claude"
+    status_dir: Optional[str] = None
     agents_source: Optional[Callable[[], Sequence[AgentInfo]]] = None
     logs_source: Optional[Callable[[str], Sequence[str]]] = None
+    statuses_source: Optional[
+        Callable[[Sequence[AgentInfo]], dict[str, "ManagerStatus"]]
+    ] = None
 
     _thread: Optional[threading.Thread] = field(default=None, init=False, repr=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
@@ -398,13 +433,26 @@ class FleetPoller:
                 )
         return logs
 
+    def _fetch_statuses(self, agents: Sequence[AgentInfo]) -> dict[str, ManagerStatus]:
+        """Read each manager's emitted status (decision #21), keyed for apply().
+
+        Uses ``statuses_source`` if injected (tests), else reads the on-disk
+        status convention from ``status_dir`` when set; otherwise no statuses.
+        """
+        if self.statuses_source is not None:
+            return dict(self.statuses_source(agents))
+        if self.status_dir is not None:
+            return read_statuses_for_agents(agents, self.status_dir)
+        return {}
+
     # ---- one poll ---------------------------------------------------------
 
     def poll_once(self) -> FleetSnapshot:
         """Run a single fetch → :meth:`FleetState.apply` cycle; return the snapshot."""
         agents = self._fetch_agents()
         logs = self._fetch_logs(agents)
-        return self.state.apply(agents, logs=logs)
+        statuses = self._fetch_statuses(agents)
+        return self.state.apply(agents, logs=logs, statuses=statuses)
 
     # ---- lifecycle --------------------------------------------------------
 
