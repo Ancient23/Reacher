@@ -1,136 +1,101 @@
-# Reachy Mini — Claude Code Fleet Supervisor
+# Reachy Mini — Fleet Supervisor
 
-> Status: **DRAFT — awaiting approval.** Per `reachy_mini/AGENTS.md`, no code/scaffolding
-> until this plan is approved. Created 2026-06-27.
+> Status: **Phase 0 + Phase 1 shipped** (works on hardware, committed & pushed to
+> `github.com/Ancient23/Reacher`, branch `main`). Updated 2026-06-27.
 
-## 1. What we're building (understanding of requirements)
+## 1. Vision
 
-An **embodied supervisor** for Claude Code. Reachy Mini becomes the voice and body of a
-"Reachy LLM" that can **see, observe, and control multiple Claude Code sessions at once** —
-a fleet of autonomous coding agents working in parallel, surfaced physically through the robot.
+An **embodied assistant for Claude Code**: Reachy Mini is the voice + body of a "Reachy LLM" you
+talk to, that can ultimately **observe and control multiple Claude Code worker sessions at once** —
+a fleet of coding agents, surfaced physically through the robot. You talk to Reachy; Reachy does
+real engineering (via Claude Code) and expresses status/personality through its body.
 
-You talk to Reachy; Reachy watches the fleet, steers it, narrates status, and physically
-signals which session needs attention. The actual coding is done by independent Claude Code
-worker sessions; Reachy is the orchestrator/avatar, not a coder itself.
+**Phase 1 (shipped) is the single-session version:** you talk to Reachy, it chats + emotes, and
+delegates real coding to one Claude Code worker. The multi-session "fleet" is the Phase 2/3
+roadmap below.
 
-### Core behavior — "plan-gated autonomy"
-- A worker session runs **fully autonomously while its plan is solid and unambiguous.**
-- **Gates defined in the plan** (e.g. "pause before pushing", "ask before deleting data")
-  → the worker pauses and **Reachy asks you out loud** to approve/deny.
-- **Ambiguity not covered by the plan** → the worker stops and **Reachy asks you** for a
-  decision; your spoken answer is routed back to that session.
-- Everything else proceeds without interruption.
+### Core behavior — "plan-gated autonomy" (target for the fleet)
+- A worker runs **fully autonomously while its plan is solid and unambiguous.**
+- **Plan-defined gates** (e.g. "pause before pushing") → Reachy **asks you out loud** to approve.
+- **Ambiguity** not covered by the plan → Reachy asks; your spoken answer routes back.
+- **Start with 1, architect for N.**
 
-### Scope
-- **Start with 1 session, architect for N.** Build the single-session voice loop first, but
-  put the session-manager / fleet abstraction in from the start so adding workers is trivial.
+## 2. Key decisions (as built)
 
-## 2. Key decisions (locked)
-
-| Decision | Choice | Why |
+| Decision | Choice | Notes |
 |---|---|---|
-| App model | **Python app** (runs on the Lite's host laptop) | Only Python can spawn/observe local Claude Code processes; JS apps are sandboxed on HF Spaces. |
-| Supervisor brain | **Claude-native** (a Claude Agent SDK session) | "Assistant for talking to Claude Code" + runs entirely on the Max plan. No OpenAI. |
-| Workers | **N × `ClaudeSDKClient`** (Agent SDK), one per git worktree | Independent persistent sessions we can stream, steer, interrupt, and gate. |
-| Auth | **Claude Max plan** via `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN` | No API key, no per-token billing; one subscription covers supervisor + all workers. |
-| Voice | **Local** — Whisper (STT) + Piper (TTS) + mic DoA | Keeps the whole stack on the Max plan with no extra paid AI account. STT/TTS are not LLMs. |
-| Autonomy | **Plan-gated** (see §1) | User's chosen model. |
-| Hardware | **Reachy Mini Lite** (USB → laptop) | Laptop runs workers + supervisor + voice + robot control. |
+| App model | **Python app**, **Windows-native host** | Only Python can spawn/observe local Claude Code; Windows confirmed working (SDK + GStreamer + motors). |
+| **Voice / personality** | **OpenAI Realtime** (forked Pollen conversation app) | Natural 'cedar' voice, good hearing, low latency, native tool-calling + persona, 81-move emotion/dance libs. Needs an **OpenAI key with Realtime access**. |
+| **Engineering** | **Claude Code via `ask_claude_code` tool** (claude-agent-sdk `WorkerSession`) | Coding stays on the **Claude Max plan** — no Anthropic API key. Default model `claude-sonnet-4-6`, effort low (env-tunable). |
+| Local fallback brain | **Whisper + Piper** (`supervisor_app/voice/emotions.py`) | Built & working, Max-plan-only/offline, but too robotic/laggy live → kept as fallback; revisit with CUDA + neural TTS on the 5090. |
+| Auth | Claude: Max-plan login (Agent SDK reuses it). OpenAI: `OPENAI_API_KEY` user env var. | |
+| Autonomy | **Plan-gated** (target for fleet) | |
+| Hardware | **Reachy Mini Lite** (USB), **rear USB-C port** | Front/USB-B port browned out the motors under load; USB-C is stable (validated: 540 motion frames, 0 errors). |
+| Launcher | **`run.ps1`** — self-healing supervisor | Starts daemon + app, verifies the **motor backend** (not just HTTP 200), auto-restarts both on any drop, crash-loop backoff. |
+| `reachy-mini` version | **pinned 1.8.4** | 1.8.0 mis-resolves the local daemon as `reachy-mini.local` (mDNS) on Windows. |
 
-## 3. Architecture
+## 3. Architecture (as built — Phase 1)
 
 ```
-You ⇄ (local STT/TTS) ⇄  Supervisor Agent (Claude, Max plan)
-                                │  custom fleet-control tools (in-process MCP)
-              ┌─────────────────┼──────────────────┐
-        WorkerSession      WorkerSession      WorkerSession      ← Claude Code (Max plan)
-        repoA/worktree-1   repoB              repoA/feature-x
-              │                 │                  │
-              └──── Event bus → FleetState (status, action, gate/question) ──┘
-                                │
-                       Embodiment mapper → Reachy motion (yaw / antennas / emotions)
+You ⇄ (robot mic/speaker) ⇄  OpenAI Realtime  ──── persona + emotion/dance tools
+                                    │   ask_claude_code(task)
+                                    ▼
+                            Claude Code WorkerSession  (claude-agent-sdk, Max plan)
+                                    │  runs in a project dir / git worktree
+                                    ▼  → short spoken summary back to Realtime
 ```
+- `openai_realtime.py` = the active voice brain (Pollen's, unmodified).
+- `profiles/_reachy_fleet_supervisor_locked_profile/` = Reachy persona (`instructions.txt`),
+  enabled tools (`tools.txt`: play_emotion, dance, move_head, sweep_look, **ask_claude_code**),
+  and `ask_claude_code.py`.
+- `claude_brain.py` = `WorkerSession` (persistent `ClaudeSDKClient`).
 
-### Components
-1. **Reachy app shell** — `ReachyMiniApp.run(reachy_mini, stop_event)` hosts one asyncio loop
-   running: voice I/O, session manager, supervisor agent, and the motion mapper.
-   Plan: **fork the `conversation` template** to reuse its audio pipeline (16 kHz mic capture,
-   DoA, speaker out) and its **LLM→queue→control-loop** motion decoupling + safe-return-to-pose,
-   then **replace its OpenAI-Realtime brain module** with our Claude supervisor + local voice.
-2. **Voice layer** — VAD-gated Whisper STT; Piper TTS to the robot speaker; head-turn toward
-   the speaker via direction-of-arrival.
-3. **SessionManager** — owns a dict of `WorkerSession`s. Each wraps a `ClaudeSDKClient` with its
-   own `cwd` (worktree), system prompt, permission config, and an async task that consumes the
-   session stream + `PreToolUse`/`PostToolUse` hooks to update status and emit events.
-4. **FleetState** — *summarized* per session (id, label, cwd, phase ∈
-   {planning, working, blocked, awaiting-approval, awaiting-clarification, done, error},
-   last_action, last_message, pending question/permission). Summary-not-firehose keeps the
-   supervisor's context small and the design scalable to N.
-5. **Supervisor agent** — a `ClaudeSDKClient` whose custom tools are the fleet API:
-   `list_sessions`, `get_status`, `spawn_session(plan, cwd)`, `send_to_session`,
-   `interrupt_session`, `approve_gate` / `deny_gate`, `answer_clarification`, `summarize_all`.
-   Mediates your voice commands and narrates back.
-6. **Gate / escalation engine** — per-session `can_use_tool` callback consults the session's
-   plan-derived gate policy; gated actions + ambiguity questions go on an **escalation queue**
-   that Reachy voices; your answer is routed back to the originating session.
-7. **Embodiment mapper** — translates FleetState → motion via the queue→control-loop pattern:
-   `body_yaw` points at the active session (sessions laid out on a virtual arc); antennas as
-   status/attention indicators (wiggle on awaiting-approval/clarification); emotion on all-green;
-   "thinking" idle while working. `safelyReturnToPose` on leave.
+### Target architecture (Phase 2/3 — the fleet)
+Generalize `ask_claude_code` (one worker) → a **SessionManager** of N worktree-isolated
+`WorkerSession`s + a **FleetState** the Realtime host can query/steer, with the body signalling
+which session needs attention (body-yaw arc, antenna status, approval/clarification by voice).
+Borrow seer-agent's ADW *pattern* (worktree + isolated ports + state JSON) but **don't depend on
+it** — the supervisor must be project-agnostic.
 
-## 4. Phased build (each phase demoable)
+## 4. Phased build
 
-- **Phase 0 — Foundations.** Scaffold app via `reachy-mini-app-assistant create`; wire
-  `CLAUDE_CODE_OAUTH_TOKEN`; robot connects, safe pose, basic motion test.
-- **Phase 1 — Single worker voice loop.** Voice → one Claude Code session in a worktree →
-  spoken responses + working/thinking motion. Plan-gated: give it a plan, it runs, asks on
-  ambiguity by voice.
-- **Phase 2 — Fleet abstraction.** Route the single session through SessionManager + FleetState
-  + event bus; drive status motion from FleetState (still 1 session).
-- **Phase 3 — N sessions + supervisor.** Supervisor agent with fleet-control tools; spawn
-  multiple workers; body-yaw arc; approval/clarification escalation by voice.
-- **Phase 4 — Polish.** Emotions/profiles, rate-limit handling, reconnect, error states,
-  robustness on the gate engine.
+- **Phase 0 — Foundations ✅** Windows-native confirmed; robot moves + mic + speaker + Claude
+  Agent SDK on the Max plan all validated on hardware.
+- **Phase 1 — Single-session assistant ✅ (shipped & committed)** OpenAI Realtime voice +
+  personality + emotions/dances + `ask_claude_code` → Claude Code does real work, speaks results.
+- **Phase 2 — Fleet abstraction.** SessionManager + FleetState + event bus; one→N worktree
+  workers; status-driven body motion.
+- **Phase 3 — N sessions + steering.** Realtime host observes/steers many workers; per-target
+  worker environments (seer-agent → WSL2; Unreal/RoadRage → Windows); plan-gated approval/
+  clarification by voice.
+- **Phase 4 — Polish.** Rate-limit handling, robustness, profiles, and a 5090-native local mode
+  (CUDA Whisper + neural TTS) as an OpenAI-free option.
 
-## 5. Risks & honest caveats
+## 5. Risks & status
 
-- **Windows feasibility (needs verification first).** You're on Windows 11. Two things to
-  confirm before committing: (a) Claude Code + `claude-agent-sdk` running cleanly on Windows
-  (native vs WSL2); (b) the Reachy Lite **local media backend** (GStreamer mic/speaker) on
-  Windows — the SDK notes WebRTC client support is Linux-first, so local audio on Windows is an
-  open question. **Mitigation:** validate a "hello, robot moves + mic captures + speaker plays"
-  spike on this exact machine in Phase 0 before building anything else. WSL2 or a Linux box may
-  end up the better host.
-- **Rate limits compound.** N concurrent Max-plan sessions share one subscription rate pool
-  (rolling 5-hour / weekly caps). A few sessions is fine; a large heavy fleet will throttle.
-  No dollar cost, but a throughput ceiling — surface it in FleetState.
-- **Worktree isolation.** Parallel sessions on one repo collide → one git worktree (or clone)
-  per worker. One-feature-per-worktree.
-- **Supervisor latency.** An LLM turn per utterance adds latency to voice UX; keep the
-  supervisor prompt lean and let it pull detail on demand rather than ingesting every token.
+- **Windows feasibility — RESOLVED.** Everything runs Windows-native (reachy_mini bundles
+  GStreamer + pycaw + Rust kinematics; motors on COM3).
+- **Motor power — RESOLVED (was the big one).** Lite motors run on USB 5 V and browned out under
+  motion on the front/USB-B port → "No motors" / "Lost connection" / frozen poses. **Rear USB-C
+  is stable.** (A powered USB hub is the fallback; the 5090 desktop should be fine too.)
+- **Daemon stability** — mitigated by `run.ps1` self-heal + motor-backend readiness gate.
+- **OpenAI cost** — the voice layer is pay-per-minute OpenAI Realtime (coding stays on Max plan).
+- **Rate limits (future fleet)** — N concurrent Max-plan workers share one subscription pool.
+- **Worktree isolation (future fleet)** — one worktree per worker.
 
-## 6. Clarifying questions (please fill in)
+## 6. Decisions log (answered)
 
-1. **Template base** — fork the `conversation` template (reuse audio + motion-queue, swap the
-   brain) as proposed, or start from the `default` template and build voice fresh?
-   → _Answer:_ ____________________ (recommend: fork `conversation`)
+1. **Template base** → **forked the `conversation` template** (kept its OpenAI Realtime brain;
+   added `ask_claude_code` + Reachy persona).
+2. **Worker plans** → for now you give tasks by voice; plan-gated fleet gating is Phase 3.
+3. **Voice stack** → **OpenAI Realtime** (chosen over local Whisper+Piper for quality/latency).
+4. **On exit** → workers stop with the app for now (detached fleet survival is a Phase 2/3 item).
+5. **Host OS** → **Windows-native**.
+6. **Publish** → committed to a **private GitHub repo** (`Ancient23/Reacher`); not on HF.
 
-2. **Where do worker plans come from?** This defines the "solid plan, no ambiguity" gate. Do you
-   author a `plan.md` per task and point a session at it, or should Reachy help you **draft and
-   approve the plan by voice first**, then launch the worker?
-   → _Answer:_ ____________________
+## 7. How to run
 
-3. **Voice engines** — local Whisper + Piper confirmed? Any preferred models, languages, or a
-   wake word vs. always-listening (DoA) turn-taking?
-   → _Answer:_ ____________________
-
-4. **On app exit**, should running workers **keep going (detached)** or **pause/stop**?
-   → _Answer:_ ____________________
-
-5. **Host OS** — target **Windows native**, **WSL2**, or a **separate Linux machine** for the
-   Lite + Claude Code? (Drives the Phase-0 feasibility spike.)
-   → _Answer:_ ____________________
-
-6. **Publish to HF?** This app is local-machine-specific (drives local Claude Code), so default
-   is **keep local / unpublished**. Publish a sanitized version later? (yes/no)
-   → _Answer:_ ____________________
+1. Robot powered + USB-C connected; `setx OPENAI_API_KEY "sk-..."` (Realtime access).
+2. From `reachy_fleet_supervisor/`, in a terminal: `.\run.ps1`.
+3. Talk to Reachy — chat, watch it emote, or ask it to do real work
+   (*"create a file called hello.txt that says hi"* → `ask_claude_code` → Claude Code → spoken result).
