@@ -16,65 +16,82 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 2
-  next_unit: U8
-  in_progress: U8
+  next_unit: U10
+  in_progress: U10
   failure_count: 0
-  units_done: 8
+  units_done: 9
   units_total: 26
-  # HUMAN_GATE (RE-EMITTED after a reported PROBLEM): the human ran the demo and saw
-  # the body turn (a bit abrupt) but the antennas never drooped on failure. Fixed in
-  # this same unit (U8 stays in_progress): (1) idle BreathingMove was reverting each
-  # pose to neutral ~0.3s after the goto ended — the demo now HOLDS each pose; (2) the
-  # applier read current joints wrong (get_current_joint_positions has no body_yaw and
-  # only 2 antennas) so every move snapped through 0° — it now interpolates from the
-  # last commanded pose (smoother); (3) failed droop deepened -30→-45 (mirror of
-  # attention +45). Antenna droop is HARDWARE-PERCEPTUAL — cannot self-verify; re-gated.
+  # U8 (Body renders FleetState) CONFIRMED PASS by the human on the refreshed demo
+  # ("Pass, all looks good"): body turns toward the flagged manager (two opposite
+  # directions at steps 2 & 3), antennas droop clearly DOWN on failure and HOLD, turn
+  # is acceptably smooth. U8 marked done. Now on U10 — Phase 2 integration capstone.
+  #
+  # U10 HUMAN_GATE: software integration test of the whole fleet core is GREEN
+  # (tests/fleet/test_integration.py — real bg session driven through SessionManager →
+  # FleetState poll → CLI + dashboard + body renderer all render it; cleaned up, 0 stray
+  # agents). README + plan.md Phase-2 status updated. The end-to-end ON-ROBOT run
+  # (talk → spawn → observe on body AND dashboard) cannot be self-verified → gated.
+  #
+  # Idle-breathing decision (carried from U8 note): in LIVE operation the body renderer
+  # only commands a pose on change, so idle BreathingMove reverts a signalled pose to
+  # neutral ~1s later. Decision: ACCEPT the momentary glance for fleet signalling (do
+  # NOT permanently suppress breathing — a frozen, non-breathing robot reads as "dead"
+  # and breathing is core to the Pollen persona). Instead, on a state CHANGE that needs
+  # attention the renderer re-asserts the pose briefly (a short hold), then lets
+  # breathing resume; the dashboard is the always-on truth, the body is a glanceable
+  # nudge. This is a per-update concern, NOT continuous suppression. See plan.md §6 #21
+  # follow-up + body.py FleetBodyRenderer(hold_seconds=...). Covered in the integration
+  # test at the software level (renderer re-asserts on attention changes via the applier
+  # hold hook); the felt "glance vs hold" timing is part of the on-robot HUMAN_GATE.
   pending_gate: |
-    U8 — Body renders FleetState (HARDWARE re-verification after a fix)
+    U10 — Phase 2 integration capstone: END-TO-END ON-ROBOT run (HARDWARE)
 
-    You previously reported: body turns (a bit abrupt) but "the antennas never droop
-    down on failure." That is now fixed in software (tests/fleet/test_body.py green):
-      - the demo now HOLDS each pose instead of letting idle breathing pull the body
-        back to neutral after ~1s (the real reason the droop "never" showed);
-      - moves now interpolate from the last commanded pose, so turns sweep smoothly
-        instead of snapping through center (less abrupt);
-      - the failed droop is deeper now: -45/-45 deg (a clear mirror of the +45/+45
-        "attention" perk), and failed is the ONLY state that drops below neutral.
-
-    Mapping under test:
-      - BODY YAW points at the manager needing attention (fixed slot angle, ±40 deg;
-        faces front / 0 deg when nobody needs you).
-      - ANTENNAS encode state: working = +15/+15 (slightly up), attention = +45/+45
-        (perked high), failed = -45/-45 (drooped DOWN), done = +30/+30 (relaxed up).
+    The software integration test is GREEN and the docs are updated. What only a human
+    on the physical robot can confirm is the full loop: TALK to Reachy → it SPAWNS a
+    manager → you OBSERVE that manager on BOTH the body AND the web dashboard, live.
 
     DO THIS:
       1. Power the Reachy Mini ON via the REAR USB-C port (NOT the front/USB-B port —
-         it browns out the motors). Wait for the daemon/motor backend to come up.
-      2. From the repo:
-             cd reachy_fleet_supervisor
-             uv run python -m reachy_fleet_supervisor.fleet.body_demo --hold 5
-         (each step now HOLDS its pose for the full window; --duration defaults to
-         1.5s for a gentler turn — raise it, e.g. --duration 2, if still too abrupt.)
-      3. The demo prints "[n] <label>" + a "LOOK FOR:" line per step. Confirm the BODY
-         matches AND that each pose is HELD steady (not snapping back to neutral):
-           [1] both working   -> faces FRONT (0 deg), antennas slightly UP (working)
-           [2] 'tests' gate   -> torso TURNS toward 'tests' (yaw +40 deg, one side),
-                                 antennas PERK UP high (attention)
-           [3] 'build' fails  -> torso TURNS the OTHER way toward 'build' (yaw -40 deg),
-                                 *** ANTENNAS now DROOP clearly DOWN *** (failed) and
-                                 STAY drooped for the whole step — THIS is the fix to
-                                 confirm.
-           [4] both complete  -> faces FRONT again (0 deg), antennas relaxed UP (done)
-         It then returns to neutral and exits.
+         it browns out the motors). Wait for the daemon/motor backend to come up
+         (run.ps1 gates on the motor backend, not just HTTP).
+      2. Launch the app (voice brain + body + dashboard) from the repo root:
+             pwsh -File reachy_fleet_supervisor/run.ps1
+         Wait until it reports the app is up and the motor backend is ready.
+      3. Open the web dashboard in a browser (the read-only fleet view, U7):
+             http://127.0.0.1:7860/fleet
+         (If run.ps1 prints a different host/port for the settings app, use that and
+         append /fleet. The page shows a 2-4 card grid; it should start empty.)
+      4. By VOICE, ask Reachy to spawn a coding manager on a real local project, e.g.:
+             "Spawn a manager called tester on <a real repo path> to run the tests."
+         (Any trivial real task is fine — the point is a live `claude --bg` session.)
+      5. WATCH BOTH RENDERERS as the manager comes up and works:
+         ON THE DASHBOARD (refreshes live):
+           - a NEW CARD appears for the manager, with its name + a stable color dot,
+             a state badge (working/attention/done), current tool, and the last line /
+             transcript ring buffer filling in.
+         ON THE BODY:
+           - the TORSO turns toward that manager's slot (or stays front if it's the
+             only one and not waiting), ANTENNAS show its state (slightly up = working).
+           - Note: when the manager is steadily working the body may relax back into
+             its breathing idle between state changes (by design — see decision above).
+             The clear, held signal to look for is on a state CHANGE: drive the manager
+             to a HUMAN_GATE or let it finish — the body should TURN to it / perk
+             (attention) or settle (done), and the dashboard card badge should match.
+      6. Confirm body and dashboard agree on WHO needs attention and WHAT state it's in.
+      7. Stop everything: Ctrl-C the app; then ensure NO stray agents remain:
+             claude agents --json      # should not list your test manager
+             claude stop <id> && claude rm <id>   # if it lingers
 
     REPORT BACK:
-      - PASS if at step [3] the antennas visibly DROOP DOWN and hold there, the body
-        turns toward the flagged manager at steps 2 and 3 (two distinct, opposite
-        directions), and the turn is acceptably smooth.
-      - PROBLEM (describe what you saw) otherwise — e.g. antennas still don't droop /
-        droop the wrong way (a sign issue → flip ANTENNA_POSES[failed] sign), pose not
-        held, wrong/opposite turn direction (negate body_yaw in make_goto_applier),
-        too abrupt (raise --duration), or motor brownout/errors.
+      - PASS if: voice spawn worked, the manager appeared on BOTH the dashboard (new
+        card, correct name/color/state/last-line) AND the body (turned toward it /
+        antennas matched its state), and the two renderers agreed. The momentary
+        breathing "glance" between changes is acceptable.
+      - PROBLEM (describe what you saw) otherwise — e.g. spawn didn't fire from voice
+        (voice→ask_claude_code/fleet-spawn wiring), card never appeared (poller /
+        FleetState), body didn't react (renderer attach / applier), body and dashboard
+        disagreed (mapping), or motor brownout/errors. Note which renderer was wrong so
+        the next iteration knows where to look.
 
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
@@ -131,7 +148,7 @@ units:
     phase: 2
     title: Body renders FleetState
     gate: hardware
-    status: in_progress
+    status: done
     deps: [U4]
     acceptance: "Map fleet status → head/antenna signals (body yaw toward the manager needing attention; antenna = state). HUMAN_GATE: human powers robot (rear USB-C) and confirms the body signals the right manager."
   - id: U9
@@ -145,7 +162,7 @@ units:
     phase: 2
     title: Phase 2 integration + docs
     gate: hardware
-    status: pending
+    status: in_progress
     deps: [U5, U6, U7, U8, U9]
     acceptance: "Software integration test of the whole fleet core (autonomous). End-to-end with the robot (talk → spawn → observe on body + dashboard) = HUMAN_GATE. Update README/plan status."
 
