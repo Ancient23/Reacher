@@ -168,6 +168,17 @@ class BodyPose:
     signal: str = SIGNAL_IDLE
     reason: str = ""
 
+    @property
+    def wants_attention(self) -> bool:
+        """True when this pose signals a manager that needs a human (attention/failed).
+
+        Used by the live renderer to decide whether to briefly *hold* the pose
+        against idle breathing (see :class:`FleetBodyRenderer`): a steady working
+        state may relax back into the breathing idle (a momentary glance), but an
+        attention/failure signal is worth lingering on so the human catches it.
+        """
+        return self.signal in (SIGNAL_ATTENTION, SIGNAL_FAILED)
+
     def describe(self) -> str:
         """One-line human-readable summary (handy for logs / a CLI preview)."""
         who = self.target_key or "front"
@@ -316,12 +327,39 @@ class FleetBodyRenderer:
     (and a working manager doesn't get its turn interrupted just because a log
     line scrolled). The *applier* is injected — :func:`make_goto_applier` on the
     real robot, a recording fake in tests.
+
+    **Idle-breathing policy (U10 decision).** In live operation the robot keeps an
+    idle ``BreathingMove`` that re-centres the torso and antennas ~1s after the
+    last commanded motion. We deliberately do **not** suppress breathing
+    continuously: a frozen, non-breathing robot reads as "dead", and breathing is
+    core to the Pollen persona. So a *steady* signal (e.g. a manager quietly
+    working) is allowed to relax back into the breathing idle — a momentary glance,
+    not a held stare; the always-on dashboard is the durable truth. What we *do*
+    want held is an **attention/failure** signal, which is worth lingering on so a
+    human actually catches it. That is the optional *hold* hook: when an applied
+    pose :attr:`~BodyPose.wants_attention`, the renderer calls ``hold(pose)`` (on
+    the real robot this briefly re-asserts the pose against breathing, e.g. via
+    ``body_demo.hold_pose`` on a worker thread). ``hold`` defaults to ``None``
+    (pure accept-the-glance) so the mapping stays testable without motors.
     """
 
-    def __init__(self, applier: BodyApplier, *, span: float = BODY_YAW_SPAN_DEG) -> None:
-        """Build a renderer that applies poses via *applier* (yaw span ±*span*)."""
+    def __init__(
+        self,
+        applier: BodyApplier,
+        *,
+        span: float = BODY_YAW_SPAN_DEG,
+        hold: Optional[Callable[[BodyPose], None]] = None,
+    ) -> None:
+        """Build a renderer applying poses via *applier* (yaw span ±*span*).
+
+        *hold*, if given, is called with a freshly-applied pose that
+        :attr:`~BodyPose.wants_attention`, so the live wiring can briefly re-assert
+        that pose against idle breathing; a steady non-attention pose is left to
+        relax (the momentary glance). A failing *hold* is logged, never raised.
+        """
         self._apply = applier
         self._span = span
+        self._hold = hold
         self._last_pose: Optional[BodyPose] = None
 
     @property
@@ -349,6 +387,13 @@ class FleetBodyRenderer:
             return None
         self._last_pose = pose
         logger.info("body → %s", pose.describe())
+        # Linger on an attention/failure signal (idle-breathing policy, U10); a
+        # steady working/done/idle pose is left to relax into breathing.
+        if pose.wants_attention and self._hold is not None:
+            try:
+                self._hold(pose)
+            except Exception:  # noqa: BLE001 — a hold hiccup must not kill the poller
+                logger.exception("body hold hook failed for pose %s", pose.describe())
         return pose
 
     def attach(

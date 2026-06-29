@@ -10,7 +10,12 @@ Reachy Mini Python app, running Windows-native.
 - **Engineering:** an `ask_claude_code` tool delegates real coding tasks to **Claude Code**
   (Claude Agent SDK) running on the user's **Claude Max plan** — no Anthropic API key needed.
 - Designed to grow into a multi-session **fleet supervisor** over several Claude Code sessions
-  (roadmap in [`plan.md`](plan.md)).
+  (roadmap in [`plan.md`](plan.md)). The **Phase 2 fleet core is built and tested**
+  (`reachy_fleet_supervisor/fleet/`): durable `claude --bg` managers tracked + reconnected by a
+  `SessionManager`, a single-source-of-truth `FleetState`, and three renderers over it — a headless
+  `fleet` CLI, a read-only web dashboard, and the **robot body** (it turns toward the manager needing
+  you and signals state with its antennas). The full on-robot voice-to-fleet loop is the last
+  Phase-2 item being verified on hardware.
 
 ## Run it
 

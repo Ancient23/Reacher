@@ -101,7 +101,18 @@ is just a subscriber to FleetState. Nothing polls the workers directly.
   Agent SDK on the Max plan all validated on hardware.
 - **Phase 1 — Single-session assistant ✅ (shipped & committed)** OpenAI Realtime voice +
   personality + emotions/dances + `ask_claude_code` → Claude Code does real work, speaks results.
-- **Phase 2 — Fleet core + observability + persistence — NEXT.**
+- **Phase 2 — Fleet core + observability + persistence — software shipped; on-robot E2E gated.**
+  Built & tested (`reachy_fleet_supervisor/fleet/`, 176 tests green incl. real `claude --bg`
+  sessions): typed fleet **config** (U1); **FleetManager** over `claude --bg` (U2); **SessionManager**
+  track-N + reconnect-from-roster (U3); **FleetState** + poller pub/sub (U4); the **status convention**
+  — managers emit, the fleet reads, never interrupts (U5, decision #21); the headless **`fleet` CLI**
+  (U6); the read-only **web dashboard** (U7); the **body renderer** (U8, human-confirmed on hardware:
+  torso turns toward the flagged manager, antennas droop on failure); per-agent **identity** name+color
+  (U9). The **whole-fleet integration test** is green (U10) — CLI, dashboard and body all render one
+  `FleetState` consistently; the **on-robot end-to-end** (talk → spawn → observe on body + dashboard)
+  is the one remaining Phase-2 HUMAN_GATE. *Idle-breathing policy (U10):* breathing is never suppressed
+  continuously (a still robot reads as "dead"); steady states relax into the breathing idle (a momentary
+  glance), only an attention/failure signal lingers (optional renderer `hold` hook).
   - `SessionManager` = **track + route N persistent manager sessions** (generalize the existing
     single worker). It does NOT implement orchestration — each manager orchestrates its own
     subagents / Workflows / ralph-loops natively. Per-agent **identity** (name + color) so you can
