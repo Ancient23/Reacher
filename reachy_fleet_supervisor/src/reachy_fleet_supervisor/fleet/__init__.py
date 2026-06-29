@@ -124,6 +124,13 @@ from .session_manager import (
     AgentPredicate,
     SessionManager,
 )
+from .runtime import (
+    FleetRuntime,
+    build_fleet_runtime,
+    get_fleet_runtime,
+    set_fleet_runtime,
+    mount_fleet_dashboard,
+)
 
 
 __all__ = [
@@ -152,6 +159,12 @@ __all__ = [
     # session manager (U3)
     "SessionManager",
     "AgentPredicate",
+    # process-wide runtime + app wiring (U10)
+    "FleetRuntime",
+    "build_fleet_runtime",
+    "get_fleet_runtime",
+    "set_fleet_runtime",
+    "mount_fleet_dashboard",
     # fleet state + poller (U4)
     "FleetState",
     "FleetSnapshot",

@@ -109,8 +109,14 @@ is just a subscriber to FleetState. Nothing polls the workers directly.
   (U6); the read-only **web dashboard** (U7); the **body renderer** (U8, human-confirmed on hardware:
   torso turns toward the flagged manager, antennas droop on failure); per-agent **identity** name+color
   (U9). The **whole-fleet integration test** is green (U10) — CLI, dashboard and body all render one
-  `FleetState` consistently; the **on-robot end-to-end** (talk → spawn → observe on body + dashboard)
-  is the one remaining Phase-2 HUMAN_GATE. *Idle-breathing policy (U10):* breathing is never suppressed
+  `FleetState` consistently. *Live-app wiring (U10):* the running app (`main.run`) now mounts the
+  `/fleet` dashboard onto `settings_app` and starts the `FleetPoller` via a shared, process-wide
+  **`FleetRuntime`** (`fleet/runtime.py`), and a new **`spawn_manager`** voice tool routes spawns
+  through that runtime's `SessionManager` so a voice-spawned `claude --bg` manager is roster-visible
+  and shows up live on the dashboard + body (distinct from `ask_claude_code`, the in-process quick
+  delegate that is intentionally *not* fleet-visible). The **on-robot end-to-end** (talk → spawn →
+  observe on body + dashboard at `http://127.0.0.1:7860/fleet`) is the one remaining Phase-2
+  HUMAN_GATE. *Idle-breathing policy (U10):* breathing is never suppressed
   continuously (a still robot reads as "dead"); steady states relax into the breathing idle (a momentary
   glance), only an attention/failure signal lingers (optional renderer `hold` hook).
   - `SessionManager` = **track + route N persistent manager sessions** (generalize the existing

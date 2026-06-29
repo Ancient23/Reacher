@@ -10,3 +10,6 @@ sweep_look
 
 # Delegate real engineering work to Claude Code (runs on the Max plan)
 ask_claude_code
+
+# Spawn a durable, watchable background fleet manager (shows on /fleet + body)
+spawn_manager

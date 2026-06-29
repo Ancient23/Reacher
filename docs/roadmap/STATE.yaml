@@ -32,6 +32,29 @@ status:
   # agents). README + plan.md Phase-2 status updated. The end-to-end ON-ROBOT run
   # (talk → spawn → observe on body AND dashboard) cannot be self-verified → gated.
   #
+  # U10 GATE PROBLEM #1 (2026-06-29) — human ran the live E2E: "robot is working /
+  # interacting with a repo but I see NOTHING in the dashboard at /fleet." ROOT CAUSE =
+  # integration wiring the isolated tests didn't cover, TWO disconnects:
+  #   (a) the RUNNING app (main.run, launched by run.ps1) built the voice/gradio app but
+  #       NEVER mounted the /fleet dashboard nor started a FleetPoller → /fleet 404'd and
+  #       no FleetState was ever refreshed; and
+  #   (b) the only voice coding tool (ask_claude_code) runs an IN-PROCESS WorkerSession
+  #       (claude_brain.py) which is NOT a `claude --bg` agent, so it never appears in
+  #       `claude agents --json` — the exact roster the poller reads. Voice-spawn path and
+  #       fleet-observability path were not wired to each other.
+  # FIX (this iteration): new fleet/runtime.py = process-wide FleetRuntime (shared
+  # FleetState + SessionManager + started FleetPoller) + mount_fleet_dashboard(); main.run
+  # now mounts /fleet onto settings_app and starts the poller (both gradio + headless
+  # branches) and stops it on shutdown; NEW voice tool `spawn_manager` (profile tool +
+  # tools.txt + instructions) routes spawns through runtime.session_manager so a
+  # voice-spawned `claude --bg` manager is roster-visible → poller → FleetState → dashboard
+  # + body. ask_claude_code stays as the quick in-process delegate (intentionally NOT
+  # fleet-visible). New software wiring tests: tests/fleet/test_app_wiring.py (mount serves
+  # /fleet over shared state; get_fleet_runtime is a started singleton; voice spawn_manager
+  # → roster → FleetState → dashboard end-to-end with a fake roster). Fleet suite 181 green;
+  # 0 stray bg agents. RESIDUAL only confirmable on the robot: the real browser at
+  # http://127.0.0.1:7860/fleet showing the live card + body agreeing → re-emitted gate.
+  #
   # Idle-breathing decision (carried from U8 note): in LIVE operation the body renderer
   # only commands a pose on change, so idle BreathingMove reverts a signalled pose to
   # neutral ~1s later. Decision: ACCEPT the momentary glance for fleet signalling (do
@@ -44,11 +67,15 @@ status:
   # test at the software level (renderer re-asserts on attention changes via the applier
   # hold hook); the felt "glance vs hold" timing is part of the on-robot HUMAN_GATE.
   pending_gate: |
-    U10 — Phase 2 integration capstone: END-TO-END ON-ROBOT run (HARDWARE)
+    U10 — Phase 2 integration capstone: END-TO-END ON-ROBOT run (HARDWARE) — RE-EMITTED
+    after fixing the reported dashboard PROBLEM (see notes above).
 
-    The software integration test is GREEN and the docs are updated. What only a human
-    on the physical robot can confirm is the full loop: TALK to Reachy → it SPAWNS a
-    manager → you OBSERVE that manager on BOTH the body AND the web dashboard, live.
+    WHAT CHANGED SINCE YOUR LAST RUN: the running app now actually serves /fleet AND
+    starts the live poller, and there's a NEW voice tool `spawn_manager` that creates a
+    DURABLE, dashboard-visible `claude --bg` manager. IMPORTANT: to see a card you must
+    ask Reachy to "SPAWN A MANAGER" (that's spawn_manager). Plain "go fix X in my repo"
+    uses ask_claude_code, which runs in-process and by design does NOT show on the
+    dashboard.
 
     DO THIS:
       1. Power the Reachy Mini ON via the REAR USB-C port (NOT the front/USB-B port —
@@ -56,42 +83,61 @@ status:
          (run.ps1 gates on the motor backend, not just HTTP).
       2. Launch the app (voice brain + body + dashboard) from the repo root:
              pwsh -File reachy_fleet_supervisor/run.ps1
-         Wait until it reports the app is up and the motor backend is ready.
-      3. Open the web dashboard in a browser (the read-only fleet view, U7):
+         Wait until it reports the app is up and the motor backend is ready. (Tip: if
+         the page 404s, check reachy_fleet_supervisor/.logs/app.err.log for a line like
+         "Fleet dashboard mounted at /fleet".)
+      3. Open the web dashboard in a browser (the read-only fleet view):
              http://127.0.0.1:7860/fleet
-         (If run.ps1 prints a different host/port for the settings app, use that and
-         append /fleet. The page shows a 2-4 card grid; it should start empty.)
-      4. By VOICE, ask Reachy to spawn a coding manager on a real local project, e.g.:
-             "Spawn a manager called tester on <a real repo path> to run the tests."
-         (Any trivial real task is fine — the point is a live `claude --bg` session.)
-      5. WATCH BOTH RENDERERS as the manager comes up and works:
-         ON THE DASHBOARD (refreshes live):
-           - a NEW CARD appears for the manager, with its name + a stable color dot,
-             a state badge (working/attention/done), current tool, and the last line /
-             transcript ring buffer filling in.
-         ON THE BODY:
-           - the TORSO turns toward that manager's slot (or stays front if it's the
-             only one and not waiting), ANTENNAS show its state (slightly up = working).
-           - Note: when the manager is steadily working the body may relax back into
-             its breathing idle between state changes (by design — see decision above).
-             The clear, held signal to look for is on a state CHANGE: drive the manager
-             to a HUMAN_GATE or let it finish — the body should TURN to it / perk
-             (attention) or settle (done), and the dashboard card badge should match.
-      6. Confirm body and dashboard agree on WHO needs attention and WHAT state it's in.
-      7. Stop everything: Ctrl-C the app; then ensure NO stray agents remain:
-             claude agents --json      # should not list your test manager
-             claude stop <id> && claude rm <id>   # if it lingers
+         The page shows a 2-4 card grid and should start EMPTY ("No managers running.").
+         Quick check it's served: http://127.0.0.1:7860/fleet/healthz returns {"ok":true}
+         and http://127.0.0.1:7860/fleet/api/fleet returns JSON with "managers": [].
+      4. By VOICE, explicitly ask Reachy to SPAWN A MANAGER on a real local project, e.g.:
+             "Spawn a manager called tester on C:\\Source\\<some-repo> to run the tests."
+         Give a real path on disk and any trivial real task. Reachy should confirm it
+         spawned a manager. (This calls spawn_manager → a live `claude --bg` session.)
+      5. WATCH BOTH RENDERERS:
+         ON THE DASHBOARD (refreshes ~2s): a NEW CARD appears for "tester" with its name
+           + stable color dot, a state badge (working/attention/done), current tool, and
+           the transcript filling in.
+         ON THE BODY: the TORSO turns toward that manager's slot, ANTENNAS show its state
+           (slightly up = working). When it's steadily working the body may relax into the
+           breathing idle between changes (by design); the clear HELD signal is on a state
+           CHANGE — let it finish or hit a gate → body should perk (attention) / settle
+           (done), and the dashboard badge should match.
+      6. Confirm body and dashboard AGREE on WHO needs attention and WHAT state it's in.
+      7. SOFTWARE SANITY CHECK (run in another terminal while the manager is up) — proves
+         the voice spawn really is a roster-visible bg agent the poller can see:
+             claude agents --json
+         You should see a "kind":"background" entry named "tester". (The dashboard reads
+         exactly this roster.)
+      8. Stop everything: Ctrl-C the app; then ensure NO stray agents remain:
+             claude agents --json                  # should NOT list "tester"
+             claude stop <id> && claude rm <id>     # if it lingers
 
     REPORT BACK:
-      - PASS if: voice spawn worked, the manager appeared on BOTH the dashboard (new
-        card, correct name/color/state/last-line) AND the body (turned toward it /
-        antennas matched its state), and the two renderers agreed. The momentary
-        breathing "glance" between changes is acceptable.
-      - PROBLEM (describe what you saw) otherwise — e.g. spawn didn't fire from voice
-        (voice→ask_claude_code/fleet-spawn wiring), card never appeared (poller /
-        FleetState), body didn't react (renderer attach / applier), body and dashboard
-        disagreed (mapping), or motor brownout/errors. Note which renderer was wrong so
-        the next iteration knows where to look.
+      - PASS if: the explicit "spawn a manager" voice request fired, "tester" showed in
+        `claude agents --json` as a background agent, a CARD appeared on the dashboard
+        (correct name/color/state/last-line) AND the body reacted (turned toward it /
+        antennas matched), and the two renderers agreed. The momentary breathing "glance"
+        between changes is acceptable.
+      - PROBLEM (describe what you saw) otherwise, and say WHERE it broke:
+          * Reachy didn't spawn / used the wrong tool → voice→spawn_manager wiring
+            (persona instructions / tool selection).
+          * `claude agents --json` shows the manager but the dashboard card never appears
+            → poller/mount (check the "Fleet dashboard mounted" log + /fleet/api/fleet).
+          * /fleet itself 404s → mount didn't run (settings_app host/port; app.err.log).
+          * Card appears but body didn't react → renderer attach/applier (the body
+            renderer is NOT yet attached to the live runtime — SEE NEXT-ITERATION NOTE).
+          * Body and dashboard disagree → mapping; motor brownout/errors → power/USB.
+
+    NEXT-ITERATION NOTE (known residual, software): main.run mounts the dashboard + poller
+    and the voice spawn is now fleet-visible, but the BODY renderer (FleetBodyRenderer)
+    is not yet attached to the shared FleetRuntime.state in main.run — on the robot the
+    body motion today is driven by openai_realtime's own status, not by FleetState. If the
+    dashboard shows the manager but the body doesn't react to fleet state, that attach is
+    the remaining wire (subscribe a FleetBodyRenderer with a make_goto_applier over the
+    movement_manager to runtime.state). The dashboard half of this gate is the priority
+    fix that was reported; flag the body half if observed.
 
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------

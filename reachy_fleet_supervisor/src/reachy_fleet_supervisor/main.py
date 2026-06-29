@@ -135,6 +135,24 @@ def run(
 
     handler = OpenaiRealtimeHandler(deps, gradio_mode=args.gradio, instance_path=instance_path)
 
+    # Fleet observability (U10): mount the read-only /fleet dashboard onto the
+    # served app and start the FleetPoller so a voice-spawned `claude --bg`
+    # manager actually shows up live. Best-effort — a fleet wiring failure must
+    # never take down the voice app. `fleet_runtime` is stopped in `finally`.
+    fleet_runtime = None
+
+    def _mount_fleet(server_app: Optional[FastAPI]) -> None:
+        nonlocal fleet_runtime
+        if server_app is None or fleet_runtime is not None:
+            return
+        try:
+            from reachy_fleet_supervisor.fleet.runtime import mount_fleet_dashboard
+
+            fleet_runtime = mount_fleet_dashboard(server_app)
+            logger.info("Fleet dashboard mounted at /fleet (poller running)")
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to mount the fleet dashboard at /fleet")
+
     stream_manager: gr.Blocks | LocalStream | None = None
 
     if args.gradio:
@@ -170,6 +188,8 @@ def run(
 
         personality_ui.wire_events(handler, stream_manager)
 
+        # Mount /fleet BEFORE gradio's catch-all "/" mount so it routes first.
+        _mount_fleet(app)
         app = gr.mount_gradio_app(app, stream.ui, path="/")
     else:
         # In headless mode, wire settings_app + instance_path to console LocalStream
@@ -179,6 +199,9 @@ def run(
             settings_app=settings_app,
             instance_path=instance_path,
         )
+        # The Reachy Mini Apps harness serves `settings_app` at the app URL
+        # (e.g. http://127.0.0.1:7860/), so mount the fleet dashboard there.
+        _mount_fleet(settings_app)
 
     # Each async service → its own thread/loop
     movement_manager.start()
@@ -207,6 +230,8 @@ def run(
     except KeyboardInterrupt:
         logger.info("Keyboard interruption in main thread... closing server.")
     finally:
+        if fleet_runtime is not None:
+            fleet_runtime.stop()
         movement_manager.stop()
         head_wobbler.stop()
         if camera_worker:
