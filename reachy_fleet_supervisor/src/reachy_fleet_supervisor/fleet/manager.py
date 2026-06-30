@@ -99,9 +99,11 @@ VALID_RC_SPAWN_MODES: frozenset[str] = frozenset({"same-dir", "worktree", "sessi
 DEFAULT_RC_SPAWN_MODE = "worktree"
 
 # Default timeouts (seconds). Spawn returns immediately but allow headroom for
-# the daemon to start; stop/rm/list are quick.
+# the daemon to start; stop/rm/list are quick. Steering (``--resume … -p``) runs
+# a real agent turn, so it gets a much larger budget.
 DEFAULT_SPAWN_TIMEOUT = 120.0
 DEFAULT_CONTROL_TIMEOUT = 60.0
+DEFAULT_STEER_TIMEOUT = 600.0
 
 
 class FleetManagerError(RuntimeError):
@@ -305,6 +307,67 @@ def build_remote_control_server_argv(
         argv += ["--remote-control-session-name-prefix", name_prefix]
     argv += ["--permission-mode", permission_mode]
     argv += list(extra_args)
+    return argv
+
+
+def build_steer_argv(
+    session_id: str,
+    message: str,
+    *,
+    permission_mode: str = DEFAULT_PERMISSION_MODE,
+    model: Optional[str] = None,
+    output_format: Optional[str] = None,
+    extra_args: Sequence[str] = (),
+    claude_bin: str = "claude",
+) -> list[str]:
+    """Assemble the verified NON-INTERACTIVE steering argv for a *background* manager.
+
+    This resolves the decision #16 open item — "non-interactive *steering* of a
+    running bg session from the shell." Of the surfaces Claude Code 2.1.196
+    exposes for an existing background session:
+
+    - ``claude attach <id>`` — INTERACTIVE: opens the session in this terminal
+      (detach with Ctrl+Z). It needs a TTY, so it is unusable headlessly from the
+      fleet (the dashboard / CLI / voice paths have no terminal to give it).
+    - ``claude --resume <sessionId> -p "<message>"`` — NON-INTERACTIVE: resume the
+      conversation by its full session id and print the reply. No TTY required.
+
+    So the fleet steers a background manager with the SECOND form (this function).
+    The *message* is appended to the manager's OWN durable conversation (the same
+    ``sessionId``; we deliberately do NOT pass ``--fork-session``, which would
+    branch a new session) and the manager continues from where it left off — which
+    is exactly the state a manager sitting on a HUMAN_GATE, ``blocked`` or ``done``
+    is in. We pass ``--permission-mode`` (default ``bypassPermissions``, matching
+    the spawn default, decision #22) so the steering turn itself never deadlocks on
+    a permission prompt.
+
+    IMPORTANT (decision #16): the daemon REJECTS ``--resume … -p`` while the
+    session is still a LIVE background agent. The caller must ``claude stop <id>``
+    FIRST to hand the session back, then run this argv — that is exactly what
+    :meth:`FleetManager.send_message` does. (Passing ``--fork-session`` here would
+    sidestep the stop but branch a *copy* instead of steering in place.)
+
+    NB ``--resume`` keys on the FULL ``sessionId`` (a UUID), NOT the short id.
+    """
+    if not session_id or not session_id.strip():
+        raise FleetManagerError("cannot steer: session_id must not be empty")
+    if not message or not message.strip():
+        raise FleetManagerError("cannot steer: message must not be empty")
+    permission_mode = validate_permission_mode(permission_mode)
+    argv: list[str] = [
+        claude_bin,
+        "--resume",
+        session_id,
+        "--permission-mode",
+        permission_mode,
+    ]
+    if model:
+        argv += ["--model", model]
+    if output_format:
+        argv += ["--output-format", output_format]
+    argv += list(extra_args)
+    # The prompt flag + message go last so they are never swallowed by an option.
+    argv += ["-p", message]
     return argv
 
 
@@ -817,3 +880,89 @@ class FleetManager:
             self.stop(check=False, timeout=timeout)
         finally:
             self.rm(check=False, timeout=timeout)
+
+    # ---- interactive steering (U12) --------------------------------------
+
+    def send_message(
+        self,
+        message: str,
+        *,
+        permission_mode: str = DEFAULT_PERMISSION_MODE,
+        model: Optional[str] = None,
+        timeout: float = DEFAULT_STEER_TIMEOUT,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        """Steer a BACKGROUND manager IN PLACE: inject *message* into its conversation.
+
+        Implements the decision #16 steering path. The SAME call powers every U12
+        "talk to a manager" control — they differ only in what you say:
+
+        - **send a message** — an ad-hoc instruction or question;
+        - **approve / answer a gate** — the reply that unblocks a manager waiting on
+          a HUMAN_GATE (e.g. "yes, go ahead" / "skip it");
+        - **reassign** — a new task ("stop that and work on X instead").
+
+        Mechanism (verified, Claude Code 2.1.196 — decision #16): the daemon REFUSES
+        ``claude --resume <id> -p`` while the session is a LIVE background agent
+        ("Session … is currently running as a background agent … add --fork-session
+        to branch off a copy"). To steer the SAME conversation in place we therefore
+        ``claude stop <id>`` FIRST — that hands the session back from the daemon —
+        and only THEN run ``claude --resume <sessionId> -p <message>``
+        (:func:`build_steer_argv`), which continues the manager's own durable
+        conversation and prints the reply. (The non-disruptive alternative,
+        ``--resume --fork-session -p``, works WITHOUT stopping but branches a *copy*,
+        so it is not an in-place steer; see :func:`build_steer_argv`.)
+
+        Returns the completed process (its ``stdout`` is the manager's reply).
+        Remote-control managers are steered from claude.ai / the Claude mobile app,
+        NOT the fleet shell (decision #16/#19), so this raises for them.
+        """
+        if self.is_remote_control:
+            raise FleetManagerError(
+                f"manager '{self.name}' is run_mode=remote-control; steer it from "
+                "claude.ai or the Claude mobile app, not the fleet shell"
+            )
+        # Release the session from the daemon first: a LIVE bg agent rejects
+        # `--resume … -p` (decision #16). `claude stop` keeps the conversation, so
+        # the subsequent resume continues it in place rather than forking a copy.
+        self.stop(check=False, timeout=timeout)
+        argv = build_steer_argv(
+            self.session_id,
+            message,
+            permission_mode=permission_mode,
+            model=model,
+            claude_bin=self.claude_bin,
+        )
+        # argv[0] is claude_bin; _run_claude re-resolves it, so pass the rest.
+        return _run_claude(
+            argv[1:], claude_bin=self.claude_bin, cwd=self.cwd, timeout=timeout, check=check
+        )
+
+    def pause(
+        self, *, check: bool = True, timeout: float = DEFAULT_CONTROL_TIMEOUT
+    ) -> Optional[subprocess.CompletedProcess[str]]:
+        """Pause the manager — semantic alias of :meth:`stop`.
+
+        ``claude stop`` halts a background session but KEEPS its conversation, so
+        it can be resumed later with :meth:`resume`. For a remote-control manager
+        this terminates its process (same as :meth:`stop`).
+        """
+        return self.stop(check=check, timeout=timeout)
+
+    def resume(
+        self, *, check: bool = True, timeout: float = DEFAULT_CONTROL_TIMEOUT
+    ) -> subprocess.CompletedProcess[str]:
+        """Resume a paused/exited BACKGROUND manager (``claude respawn <id>``).
+
+        ``claude respawn`` restarts the background session (picking up where it left
+        off and on the current binary). Remote-control managers are not in the
+        roster, so there is no ``respawn`` for them — relaunch is out of scope here.
+        """
+        if self.is_remote_control:
+            raise FleetManagerError(
+                f"manager '{self.name}' is run_mode=remote-control and has no roster "
+                "row to respawn; relaunch it from claude.ai or re-spawn it"
+            )
+        return _run_claude(
+            ["respawn", self.id], claude_bin=self.claude_bin, timeout=timeout, check=check
+        )

@@ -16,23 +16,25 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 3
-  next_unit: U12
-  in_progress: U12
+  next_unit: U13
+  in_progress: ""
   failure_count: 0
-  units_done: 11
+  units_done: 12
   units_total: 26
   # Phase 2 COMPLETE (U1-U10). U11 (Phase 3 run_mode knob) DONE — software complete +
   # green; the optional RC LIVE-CONNECT check (claude.ai-OAuth steering) was SKIPPED by
   # explicit human choice (2026-06-30): the RC software path is complete and tested, the
   # live steering test is deferred, not required. Full U11 history is in JOURNAL.md.
   #
-  # Now on U12 (Phase 3) — interactive controls (CLI + dashboard): approve gate / send
-  # message / pause-resume / spawn-kill / reassign over the fleet. Decision #16 open item:
-  # verify + document the NON-INTERACTIVE steering path for background managers
-  # (`claude --resume <id> -p <msg>` vs agent-view). Background managers run
-  # bypassPermissions (U10) so "approve a gate" for them = sending the steering message
-  # that unblocks/redirects; remote-control managers (U11) are steered from claude.ai and
-  # are NOT roster-visible, so fleet-side controls target the background backbone.
+  # U12 (Phase 3) DONE — interactive controls (CLI + dashboard): fleet/control.py
+  # FleetController (send / pause / resume / kill) shared by CLI + dashboard. Decision #16
+  # open item RESOLVED + documented: in-place steer of a LIVE bg manager = `claude stop
+  # <id>` FIRST (a live bg agent rejects `--resume … -p`), THEN `claude --resume
+  # <sessionId> -p <msg>` continues its own conversation (the non-disruptive alternative
+  # is `--resume --fork-session -p`, which branches a copy — not chosen). Verified by a
+  # REAL bg steering round-trip in tests/fleet/test_manager.py. Fleet suite 261 green.
+  #
+  # Now on U13 (Phase 3) — managers run ralph/drive loops (decision #15; dep U5 done).
   pending_gate: ""
 
 units:
@@ -120,7 +122,7 @@ units:
     phase: 3
     title: Interactive controls (CLI + dashboard)
     gate: software
-    status: pending
+    status: done
     deps: [U6, U7]
     acceptance: "approve gate / send message / pause-resume / spawn-kill / reassign. NB verify the non-interactive steering path for bg sessions (claude --resume <id> -p vs agent-view) — decision #16 open item; document the chosen mechanism. Tested."
   - id: U13

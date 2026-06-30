@@ -155,17 +155,24 @@ def mount_fleet_dashboard(
     *,
     runtime: Optional[FleetRuntime] = None,
     path: str = "/fleet",
+    controls: bool = True,
     **dashboard_kwargs: Any,
 ) -> FleetRuntime:
-    """Mount the read-only fleet dashboard (U7) onto *server_app* at *path*.
+    """Mount the fleet dashboard (U7 + U12 controls) onto *server_app* at *path*.
 
     Uses *runtime* if given, else the process-wide :func:`get_fleet_runtime`
-    (which also starts the poller). Returns the runtime so the caller can stop
-    it on shutdown. This is exactly what ``main.run`` calls to serve ``/fleet``.
+    (which also starts the poller). When *controls* is true (the default) the
+    dashboard is interactive: it gets a :class:`FleetController` over the
+    runtime's :class:`SessionManager` so send / pause / resume / kill work from
+    the browser (U12). Pass ``controls=False`` for a read-only mount. Returns the
+    runtime so the caller can stop it on shutdown. This is what ``main.run``
+    calls to serve ``/fleet``.
     """
+    from .control import FleetController
     from .dashboard import create_dashboard_app
 
     rt = runtime if runtime is not None else get_fleet_runtime()
-    server_app.mount(path, create_dashboard_app(rt.state, **dashboard_kwargs))
-    logger.info("fleet dashboard mounted at %s", path)
+    controller = FleetController(rt.session_manager) if controls else None
+    server_app.mount(path, create_dashboard_app(rt.state, controller=controller, **dashboard_kwargs))
+    logger.info("fleet dashboard mounted at %s (controls=%s)", path, controls)
     return rt

@@ -475,6 +475,77 @@ def test_spawn_raises_when_session_never_appears(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Steering / control (U12) — RC guards, no subprocess
+# ---------------------------------------------------------------------------
+
+
+def _rc_manager(name: str = "phone") -> FleetManager:
+    return FleetManager(
+        session_id="rc-1111-2222-3333-444444444444", id="rc", name=name,
+        run_mode="remote-control", process=None,
+    )
+
+
+def test_send_message_rejects_remote_control() -> None:
+    """A remote-control manager is steered from claude.ai, not via --resume."""
+    with pytest.raises(FleetManagerError, match="remote-control"):
+        _rc_manager().send_message("hello")
+
+
+def test_resume_rejects_remote_control() -> None:
+    with pytest.raises(FleetManagerError, match="remote-control"):
+        _rc_manager().resume()
+
+
+def test_send_message_assembles_resume_argv(monkeypatch) -> None:
+    """In-place steer = `claude stop <id>` FIRST, then `--resume <sessionId> -p`.
+
+    Decision #16: the daemon rejects `--resume … -p` on a LIVE bg agent, so
+    send_message must stop the session before resuming its conversation.
+    """
+    calls: list[list[str]] = []
+
+    def fake_run(args, *, claude_bin="claude", cwd=None, timeout=None, check=True):
+        import subprocess as _sp
+        calls.append(list(args))
+        return _sp.CompletedProcess(list(args), 0, stdout="ok", stderr="")
+
+    import reachy_fleet_supervisor.fleet.manager as mm
+    monkeypatch.setattr(mm, "_run_claude", fake_run)
+    mgr = FleetManager(
+        session_id="sess-uuid-xyz", id="sess", name="alpha", cwd="/proj", run_mode="background"
+    )
+    proc = mgr.send_message("approve")
+    assert proc.stdout == "ok"
+    # Stop must precede the resume so the daemon hands the session back.
+    assert calls[0] == ["stop", "sess"]
+    assert calls[1] == [
+        "--resume", "sess-uuid-xyz", "--permission-mode", "bypassPermissions", "-p", "approve"
+    ]
+
+
+def test_pause_is_stop_alias(monkeypatch) -> None:
+    """pause() delegates to stop() (claude stop <id>)."""
+    seen: dict = {}
+    import reachy_fleet_supervisor.fleet.manager as mm
+    monkeypatch.setattr(
+        mm, "_run_claude",
+        lambda args, **k: seen.setdefault("args", list(args)),
+    )
+    FleetManager(session_id="s", id="aaa", name="a", run_mode="background").pause(check=False)
+    assert seen["args"] == ["stop", "aaa"]
+
+
+def test_resume_calls_respawn(monkeypatch) -> None:
+    seen: dict = {}
+    import reachy_fleet_supervisor.fleet.manager as mm
+    monkeypatch.setattr(mm, "_run_claude", lambda args, **k: seen.setdefault("args", list(args)))
+    FleetManager(session_id="s", id="aaa", name="a", run_mode="background").resume(check=False)
+    assert seen["args"] == ["respawn", "aaa"]
+
+
+# ---------------------------------------------------------------------------
 # Integration — REAL trivial background session, always cleaned up
 # ---------------------------------------------------------------------------
 
@@ -509,5 +580,45 @@ def test_real_bg_session_lifecycle(tmp_path) -> None:
         if mgr is not None:
             mgr.stop_and_remove()
             # Verify it is gone from the active roster (not in non-completed list).
+            remaining = [a for a in list_agents(include_all=False) if a.session_id == mgr.session_id]
+            assert remaining == [], f"manager {mgr.session_id} still active after teardown"
+
+
+@pytest.mark.skipif(not _HAS_CLAUDE, reason="claude CLI not installed")
+def test_real_bg_steering_round_trip(tmp_path) -> None:
+    """Verify the decision #16 steering path end to end on a REAL bg manager.
+
+    Spawn a trivial background manager, let it settle, then steer it with
+    ``claude --resume <sessionId> -p`` (FleetManager.send_message) and assert the
+    injection succeeds (exit 0, a non-empty reply). ALWAYS torn down.
+    """
+    import time
+
+    name = f"u12-steer-{uuid.uuid4().hex[:8]}"
+    mgr = None
+    try:
+        mgr = FleetManager.spawn(
+            "Reply with the single word READY and then wait.",
+            name=name,
+            cwd=tmp_path,
+        )
+        # Let the manager reach a settled (non-working) state before steering, so
+        # the resume continues its conversation rather than racing the first turn.
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            info = mgr.info()
+            if info is not None and info.state in {"done", "blocked", "failed", "stopped"}:
+                break
+            time.sleep(2)
+
+        proc = mgr.send_message(
+            "Reply with the single word PONG and nothing else.", timeout=180.0, check=False
+        )
+        # The steering injection must have RUN (the CLI accepted --resume … -p).
+        assert proc.returncode == 0, f"steer failed (exit {proc.returncode}): {proc.stderr}"
+        assert proc.stdout.strip() != "", "steering produced no reply"
+    finally:
+        if mgr is not None:
+            mgr.stop_and_remove()
             remaining = [a for a in list_agents(include_all=False) if a.session_id == mgr.session_id]
             assert remaining == [], f"manager {mgr.session_id} still active after teardown"

@@ -365,6 +365,67 @@ def test_stop_unknown_manager(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Interactive controls (U12): send / pause / resume
+# ---------------------------------------------------------------------------
+
+
+def test_send_steers_and_prints_reply(monkeypatch) -> None:
+    """`fleet send <key> <msg>` steers the manager and prints its reply."""
+    _patch_roster(monkeypatch, [_bg_row("aaaa1111", "alpha")])
+    sent: dict = {}
+
+    def fake_send(self, message, **k):
+        sent["id"] = self.id
+        sent["message"] = message
+        import subprocess
+        return subprocess.CompletedProcess([], 0, stdout="ACK: working on it", stderr="")
+
+    monkeypatch.setattr(FleetManager, "send_message", fake_send)
+    code, out, _ = _run(["send", "alpha", "approve the gate"])
+    assert code == 0
+    assert sent == {"id": "aaaa1111", "message": "approve the gate"}
+    assert "ACK: working on it" in out
+
+
+def test_send_json_reports_result(monkeypatch) -> None:
+    _patch_roster(monkeypatch, [_bg_row("aaaa1111", "alpha")])
+    import subprocess
+    monkeypatch.setattr(
+        FleetManager, "send_message",
+        lambda self, message, **k: subprocess.CompletedProcess([], 0, stdout="done", stderr=""),
+    )
+    code, out, _ = _run(["send", "alpha", "hi", "--json"])
+    assert code == 0
+    data = json.loads(out)
+    assert data["ok"] is True and data["action"] == "send" and data["manager_id"] == "aaaa1111"
+
+
+def test_send_unknown_manager_returns_2(monkeypatch) -> None:
+    _patch_roster(monkeypatch, [_bg_row("aaaa1111", "alpha")])
+    code, out, err = _run(["send", "ghost", "hi"])
+    assert code == 2
+    assert "no manager matching" in err
+
+
+def test_pause_calls_stop(monkeypatch) -> None:
+    _patch_roster(monkeypatch, [_bg_row("aaaa1111", "alpha")])
+    paused = []
+    monkeypatch.setattr(FleetManager, "pause", lambda self, **k: paused.append(self.id))
+    code, out, _ = _run(["pause", "alpha"])
+    assert code == 0 and paused == ["aaaa1111"]
+    assert "paused alpha" in out
+
+
+def test_resume_calls_respawn(monkeypatch) -> None:
+    _patch_roster(monkeypatch, [_bg_row("aaaa1111", "alpha")])
+    resumed = []
+    monkeypatch.setattr(FleetManager, "resume", lambda self, **k: resumed.append(self.id))
+    code, out, _ = _run(["resume", "alpha"])
+    assert code == 0 and resumed == ["aaaa1111"]
+    assert "resumed alpha" in out
+
+
+# ---------------------------------------------------------------------------
 # Integration — REAL bg session driven entirely through the CLI
 # ---------------------------------------------------------------------------
 

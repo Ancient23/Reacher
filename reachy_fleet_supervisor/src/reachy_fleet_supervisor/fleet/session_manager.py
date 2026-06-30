@@ -233,6 +233,25 @@ class SessionManager:
         """Stop one manager (``claude stop``); keep it tracked (state persists)."""
         self.require(key).stop(check=check)
 
+    # ---- interactive steering (U12) --------------------------------------
+
+    def send_message(self, key: str, message: str, **kwargs: Any) -> Any:
+        """Steer one tracked manager (send / approve gate / reassign).
+
+        Delegates to :meth:`FleetManager.send_message` (the decision #16
+        ``claude --resume <id> -p`` path for background managers). Returns the
+        completed process (its ``stdout`` is the manager's reply).
+        """
+        return self.require(key).send_message(message, **kwargs)
+
+    def pause(self, key: str, *, check: bool = True) -> None:
+        """Pause one tracked manager (``claude stop``; conversation kept, resumable)."""
+        self.require(key).pause(check=check)
+
+    def resume(self, key: str, *, check: bool = True) -> None:
+        """Resume one paused/exited tracked manager (``claude respawn``)."""
+        self.require(key).resume(check=check)
+
     def stop_and_remove(self, key: str, *, forget: bool = True) -> None:
         """Stop + remove one manager and (by default) forget it from the registry."""
         manager = self.require(key)

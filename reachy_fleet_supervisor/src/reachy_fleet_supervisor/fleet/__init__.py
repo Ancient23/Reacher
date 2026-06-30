@@ -113,6 +113,7 @@ from .manager import (
     list_agents,
     short_id_for,
     build_spawn_argv,
+    build_steer_argv,
     resolve_run_mode,
     parse_agents_json,
     validate_run_mode,
@@ -121,6 +122,11 @@ from .manager import (
     resolve_permission_mode,
     validate_permission_mode,
     build_remote_control_server_argv,
+)
+from .control import (
+    CONTROL_ACTIONS,
+    ControlResult,
+    FleetController,
 )
 from .runtime import (
     FleetRuntime,
@@ -166,6 +172,7 @@ __all__ = [
     "list_agents",
     "short_id_for",
     "build_spawn_argv",
+    "build_steer_argv",
     "build_remote_control_server_argv",
     "parse_spawn_output",
     "parse_agents_json",
@@ -185,6 +192,10 @@ __all__ = [
     # session manager (U3)
     "SessionManager",
     "AgentPredicate",
+    # interactive controls (U12)
+    "FleetController",
+    "ControlResult",
+    "CONTROL_ACTIONS",
     # process-wide runtime + app wiring (U10)
     "FleetRuntime",
     "build_fleet_runtime",

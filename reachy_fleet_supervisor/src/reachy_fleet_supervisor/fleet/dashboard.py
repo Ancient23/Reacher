@@ -27,11 +27,12 @@ from __future__ import annotations
 import html
 from typing import Callable, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .cli import _snapshot_dict  # single serialization source shared with the CLI
 from .state import FleetState, FleetSnapshot, ManagerSnapshot
+from .control import CONTROL_ACTIONS, FleetController
 
 
 # Default browser poll cadence (ms). Matches the FleetPoller's ~2 s server cadence.
@@ -65,8 +66,27 @@ def _esc(value: object) -> str:
     return html.escape("" if value is None else str(value))
 
 
-def _render_card(m: ManagerSnapshot) -> str:
-    """Render one manager as a status card."""
+def _render_controls(ident: str) -> str:
+    """Render the per-card interactive control row (U12).
+
+    A message box (send / approve a gate / reassign) plus pause / resume / kill.
+    All buttons carry ``data-action``/``data-key`` so a single delegated grid
+    listener handles them — surviving the live re-render that rebuilds the grid.
+    """
+    return f"""        <div class="controls" data-key="{ident}">
+          <input class="msg" type="text" placeholder="message · approve · reassign…">
+          <div class="btns">
+            <button data-action="send" data-key="{ident}">send</button>
+            <button data-action="pause" data-key="{ident}">pause</button>
+            <button data-action="resume" data-key="{ident}">resume</button>
+            <button data-action="kill" data-key="{ident}" class="danger">kill</button>
+          </div>
+          <div class="ctl-result" data-key="{ident}"></div>
+        </div>"""
+
+
+def _render_card(m: ManagerSnapshot, *, controls: bool = False) -> str:
+    """Render one manager as a status card (with control row if *controls*)."""
     name = _esc(m.name or "<unnamed>")
     ident = _esc(m.id or m.session_id)
     state = _esc(m.state or "unknown")
@@ -85,6 +105,7 @@ def _render_card(m: ManagerSnapshot) -> str:
     state_slug = _esc((m.state or "unknown").lower())
     color_hex = _esc(m.color.hex) if m.color is not None else "transparent"
     color_name = _esc(m.color.name) if m.color is not None else ""
+    control_row = ("\n" + _render_controls(ident)) if controls else ""
     return f"""      <article class="card{attn}" data-key="{ident}" style="--agent:{color_hex}">
         <header>
           <span class="name"><span class="dot" title="{color_name}"></span>{name}</span>
@@ -94,19 +115,43 @@ def _render_card(m: ManagerSnapshot) -> str:
           <span class="tool">tool: {tool}</span></div>
         {waiting}
         <div class="headline">{headline}</div>
-        <details class="transcript"><summary>transcript</summary><pre>{transcript}</pre></details>
+        <details class="transcript"><summary>transcript</summary><pre>{transcript}</pre></details>{control_row}
       </article>"""
 
 
-def render_cards(snapshot: FleetSnapshot) -> str:
+def render_cards(snapshot: FleetSnapshot, *, controls: bool = False) -> str:
     """Render the full card grid (or an empty-state message)."""
     if not snapshot.managers:
         return '      <p class="empty">No managers running.</p>'
-    return "\n".join(_render_card(m) for m in snapshot.managers)
+    return "\n".join(_render_card(m, controls=controls) for m in snapshot.managers)
 
 
-def render_page(snapshot: FleetSnapshot, *, title: str, poll_ms: int) -> str:
-    """Render the complete dashboard HTML document for *snapshot*."""
+def render_page(
+    snapshot: FleetSnapshot, *, title: str, poll_ms: int, controls: bool = False
+) -> str:
+    """Render the complete dashboard HTML document for *snapshot*.
+
+    When *controls* is true each card gains an interactive control row (send /
+    pause / resume / kill, U12) and the page wires the buttons to
+    ``POST /api/control/<action>``. When false, NO control markup or wiring is
+    shipped (the Phase-2 read-only dashboard).
+    """
+    # The JS card() builder injects this per card. Single (not doubled) braces:
+    # it is interpolated as a VALUE into the f-string, so `${id}` is the runtime
+    # JS template var. Empty string in read-only mode → no control UI is emitted.
+    card_controls_js = (
+        '`\n'
+        '        <div class="controls" data-key="${id}">\n'
+        '          <input class="msg" type="text" placeholder="message · approve · reassign…">\n'
+        '          <div class="btns">\n'
+        '            <button data-action="send" data-key="${id}">send</button>\n'
+        '            <button data-action="pause" data-key="${id}">pause</button>\n'
+        '            <button data-action="resume" data-key="${id}">resume</button>\n'
+        '            <button data-action="kill" data-key="${id}" class="danger">kill</button>\n'
+        '          </div>\n'
+        '          <div class="ctl-result" data-key="${id}"></div>\n'
+        '        </div>`'
+    ) if controls else '""'
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -141,16 +186,28 @@ def render_page(snapshot: FleetSnapshot, *, title: str, poll_ms: int) -> str:
     .headline {{ margin: .4rem 0; }}
     .transcript pre {{ max-height: 12rem; overflow: auto; font-size: .72rem;
                        background: #8881; padding: .4rem; border-radius: 6px; }}
+    .controls {{ margin-top: .5rem; border-top: 1px dashed #8884; padding-top: .5rem; }}
+    .controls .msg {{ width: 100%; box-sizing: border-box; font-size: .78rem;
+                      padding: .25rem .4rem; border: 1px solid #8886; border-radius: 6px; }}
+    .controls .btns {{ display: flex; gap: .35rem; flex-wrap: wrap; margin-top: .35rem; }}
+    .controls button {{ font-size: .72rem; padding: .2rem .5rem; border-radius: 6px;
+                        border: 1px solid #8886; cursor: pointer; background: #8882; }}
+    .controls button.danger {{ border-color: #c62828aa; color: #c62828; }}
+    .controls button:disabled {{ opacity: .5; cursor: default; }}
+    .ctl-result {{ font-size: .72rem; margin-top: .35rem; white-space: pre-wrap;
+                   color: #888; max-height: 8rem; overflow: auto; }}
+    .ctl-result.err {{ color: #c62828; }}
     .empty {{ color: #888; }}
   </style>
 </head>
 <body>
   <h1>{_esc(title)} <span class="muted" id="meta"></span></h1>
   <div id="grid">
-{render_cards(snapshot)}
+{render_cards(snapshot, controls=controls)}
   </div>
   <script>
     const POLL_MS = {poll_ms};
+    const CONTROLS = {str(controls).lower()};
     const esc = (s) => (s == null ? "" : String(s)).replace(/[&<>"]/g,
       (c) => ({{"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}}[c]));
     function card(m) {{
@@ -164,6 +221,7 @@ def render_page(snapshot: FleetSnapshot, *, title: str, poll_ms: int) -> str:
         ? m.transcript.map(esc).join("\\n") : "(no transcript)";
       const colorHex = (m.color && m.color.hex) ? esc(m.color.hex) : "transparent";
       const colorName = (m.color && m.color.name) ? esc(m.color.name) : "";
+      const controls = {card_controls_js};
       return `<article class="card${{m.needs_attention ? " attention" : ""}}" data-key="${{id}}" style="--agent:${{colorHex}}">
         <header><span class="name"><span class="dot" title="${{colorName}}"></span>${{esc(m.name || "<unnamed>")}}</span>
           <span class="id">${{id}}</span></header>
@@ -171,7 +229,7 @@ def render_page(snapshot: FleetSnapshot, *, title: str, poll_ms: int) -> str:
           <span class="tool">tool: ${{esc(m.status || "\\u2014")}}</span></div>
         ${{waiting}}
         <div class="headline">${{headline}}</div>
-        <details class="transcript"><summary>transcript</summary><pre>${{transcript}}</pre></details>
+        <details class="transcript"><summary>transcript</summary><pre>${{transcript}}</pre></details>${{controls}}
       </article>`;
     }}
     // Snapshot per-card UI state (open transcript + scroll) keyed by the STABLE
@@ -184,7 +242,16 @@ def render_page(snapshot: FleetSnapshot, *, title: str, poll_ms: int) -> str:
         if (!key) return;
         const det = el.querySelector("details.transcript");
         const pre = el.querySelector("details.transcript pre");
-        ui[key] = {{ open: det ? det.open : false, scroll: pre ? pre.scrollTop : 0 }};
+        const msg = el.querySelector(".controls .msg");
+        const res = el.querySelector(".ctl-result");
+        ui[key] = {{
+          open: det ? det.open : false,
+          scroll: pre ? pre.scrollTop : 0,
+          // Preserve a half-typed message + the last action result across polls.
+          msg: msg ? msg.value : "",
+          result: res ? res.textContent : "",
+          resultErr: res ? res.classList.contains("err") : false,
+        }};
       }});
       return ui;
     }}
@@ -197,6 +264,47 @@ def render_page(snapshot: FleetSnapshot, *, title: str, poll_ms: int) -> str:
         if (det) det.open = saved.open;
         const pre = el.querySelector("details.transcript pre");
         if (pre) pre.scrollTop = saved.scroll;
+        const msg = el.querySelector(".controls .msg");
+        if (msg && saved.msg) msg.value = saved.msg;
+        const res = el.querySelector(".ctl-result");
+        if (res && saved.result) {{ res.textContent = saved.result; res.classList.toggle("err", saved.resultErr); }}
+      }});
+    }}
+    // Interactive controls (U12): one delegated listener on the stable #grid
+    // element, so it keeps working after each live innerHTML re-render.
+    async function control(action, key, card) {{
+      const res = card.querySelector(`.ctl-result[data-key="${{key}}"]`);
+      const msgEl = card.querySelector(".controls .msg");
+      const message = msgEl ? msgEl.value : "";
+      if (action === "send" && !message.trim()) {{
+        if (res) {{ res.textContent = "type a message first"; res.classList.add("err"); }}
+        return;
+      }}
+      if (action === "kill" && !confirm(`Kill ${{key}}? This stops and removes it.`)) return;
+      const btns = card.querySelectorAll(".controls button");
+      btns.forEach((b) => (b.disabled = true));
+      if (res) {{ res.textContent = action + "…"; res.classList.remove("err"); }}
+      try {{
+        const r = await fetch(`api/control/${{action}}`, {{
+          method: "POST", headers: {{"content-type": "application/json"}},
+          body: JSON.stringify({{key, message}}),
+        }});
+        const data = await r.json();
+        if (res) {{ res.textContent = data.detail || (data.ok ? "ok" : "failed"); res.classList.toggle("err", !data.ok); }}
+        if (data.ok && action === "send" && msgEl) msgEl.value = "";
+      }} catch (e) {{
+        if (res) {{ res.textContent = "request failed"; res.classList.add("err"); }}
+      }} finally {{
+        btns.forEach((b) => (b.disabled = false));
+        refresh();
+      }}
+    }}
+    if (CONTROLS) {{
+      document.getElementById("grid").addEventListener("click", (ev) => {{
+        const btn = ev.target.closest("button[data-action]");
+        if (!btn) return;
+        const card = btn.closest(".card");
+        control(btn.getAttribute("data-action"), btn.getAttribute("data-key"), card);
       }});
     }}
     async function refresh() {{
@@ -232,17 +340,26 @@ def create_dashboard_app(
     title: str = "Reachy Fleet",
     poll_ms: int = DEFAULT_POLL_MS,
     on_request: Optional[RefreshHook] = None,
+    controller: Optional[FleetController] = None,
 ) -> FastAPI:
-    """Build the read-only FleetState dashboard as a :class:`FastAPI` app.
+    """Build the FleetState dashboard as a :class:`FastAPI` app.
 
     *state* is the single source of truth this dashboard renders. *on_request*,
     if given, is called before every read (handy for a standalone server with no
     background poller — pass ``poller.poll_once`` to refresh on demand); when an
     external :class:`FleetPoller` already keeps *state* fresh, leave it ``None``.
     A failing ``on_request`` is swallowed so the dashboard still serves the last
-    known snapshot. Mount onto the Reachy Mini settings app or run via uvicorn.
+    known snapshot.
+
+    If *controller* is given the dashboard becomes **interactive** (U12): each
+    card gets send / pause / resume / kill controls and a ``POST
+    /api/control/<action>`` endpoint drives them through the shared
+    :class:`~reachy_fleet_supervisor.fleet.control.FleetController`. Without a
+    controller the dashboard stays read-only (decision #21 — the Phase-2
+    behavior). Mount onto the Reachy Mini settings app or run via uvicorn.
     """
     app = FastAPI(title=title)
+    controls_enabled = controller is not None
 
     def _current() -> FleetSnapshot:
         if on_request is not None:
@@ -254,7 +371,9 @@ def create_dashboard_app(
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:  # pragma: no cover - exercised via TestClient
-        return HTMLResponse(render_page(_current(), title=title, poll_ms=poll_ms))
+        return HTMLResponse(
+            render_page(_current(), title=title, poll_ms=poll_ms, controls=controls_enabled)
+        )
 
     @app.get("/api/fleet")
     def api_fleet() -> JSONResponse:  # pragma: no cover - exercised via TestClient
@@ -263,5 +382,23 @@ def create_dashboard_app(
     @app.get("/healthz")
     def healthz() -> dict[str, bool]:  # pragma: no cover - exercised via TestClient
         return {"ok": True}
+
+    if controller is not None:
+
+        @app.post("/api/control/{action}")
+        async def api_control(action: str, request: Request) -> JSONResponse:  # pragma: no cover - via TestClient
+            if action not in CONTROL_ACTIONS:
+                return JSONResponse(
+                    {"ok": False, "action": action, "detail": f"unknown action {action!r}"},
+                    status_code=404,
+                )
+            try:
+                body = await request.json()
+            except Exception:  # noqa: BLE001 — tolerate a missing/garbled body
+                body = {}
+            key = str(body.get("key", "")) if isinstance(body, dict) else ""
+            message = str(body.get("message", "")) if isinstance(body, dict) else ""
+            result = controller.apply(action, key, message)
+            return JSONResponse(result.to_dict(), status_code=200 if result.ok else 400)
 
     return app

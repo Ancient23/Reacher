@@ -292,6 +292,95 @@ def test_on_request_error_is_swallowed() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Interactive controls (U12) — opt-in via a FleetController
+# ---------------------------------------------------------------------------
+
+from reachy_fleet_supervisor.fleet import FleetController, FleetManager  # noqa: E402
+from reachy_fleet_supervisor.fleet import manager as manager_mod  # noqa: E402
+
+
+def _controller_with(*managers: FleetManager) -> FleetController:
+    sm = SessionManager()
+    for m in managers:
+        sm.adopt(m)
+    return FleetController(sm)
+
+
+def _bg(short_id: str, name: str) -> FleetManager:
+    return FleetManager(
+        session_id=f"{short_id}-1111-2222-3333-444444444444",
+        id=short_id, name=name, cwd="/proj", run_mode="background",
+    )
+
+
+def test_read_only_by_default_no_controls() -> None:
+    """Without a controller the dashboard stays read-only (no control markup/POST)."""
+    state = _state_with(_agent("aaa111", "alice"))
+    client = TestClient(create_dashboard_app(state))
+    body = client.get("/").text
+    assert 'class="controls"' not in body
+    assert "const CONTROLS = false" in body
+    # No control endpoint mounted → POST is not allowed.
+    assert client.post("/api/control/pause", json={"key": "alice"}).status_code in (404, 405)
+
+
+def test_controls_rendered_when_controller_present() -> None:
+    """With a controller each card gains send/pause/resume/kill buttons."""
+    state = _state_with(_agent("aaa111", "alice"))
+    client = TestClient(create_dashboard_app(state, controller=_controller_with(_bg("aaa111", "alice"))))
+    body = client.get("/").text
+    assert "const CONTROLS = true" in body
+    assert 'class="controls"' in body
+    for action in ("send", "pause", "resume", "kill"):
+        assert f'data-action="{action}"' in body
+
+
+def test_render_page_controls_flag() -> None:
+    """render_page(controls=…) toggles the control row deterministically."""
+    snap = _state_with(_agent("aaa111", "alice")).snapshot
+    assert 'class="controls"' in render_page(snap, title="T", poll_ms=2000, controls=True)
+    assert 'class="controls"' not in render_page(snap, title="T", poll_ms=2000, controls=False)
+
+
+def test_post_control_send_dispatches(monkeypatch) -> None:
+    """POST /api/control/send steers the manager through the shared controller."""
+    import subprocess
+    monkeypatch.setattr(
+        manager_mod, "_run_claude",
+        lambda args, **k: subprocess.CompletedProcess(list(args), 0, stdout="ACK", stderr=""),
+    )
+    state = _state_with(_agent("aaa111", "alice"))
+    client = TestClient(create_dashboard_app(state, controller=_controller_with(_bg("aaa111", "alice"))))
+    resp = client.post("/api/control/send", json={"key": "alice", "message": "approve"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True and data["action"] == "send" and "ACK" in data["detail"]
+
+
+def test_post_control_kill_dispatches(monkeypatch) -> None:
+    monkeypatch.setattr(manager_mod, "_run_claude", lambda args, **k: None)
+    ctl = _controller_with(_bg("aaa111", "alice"))
+    state = _state_with(_agent("aaa111", "alice"))
+    client = TestClient(create_dashboard_app(state, controller=ctl))
+    resp = client.post("/api/control/kill", json={"key": "alice"})
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    assert ctl.session_manager.get("alice") is None  # forgotten after kill
+
+
+def test_post_control_unknown_action_404() -> None:
+    state = _state_with(_agent("aaa111", "alice"))
+    client = TestClient(create_dashboard_app(state, controller=_controller_with(_bg("aaa111", "alice"))))
+    assert client.post("/api/control/frobnicate", json={"key": "alice"}).status_code == 404
+
+
+def test_post_control_missing_key_400() -> None:
+    state = _state_with(_agent("aaa111", "alice"))
+    client = TestClient(create_dashboard_app(state, controller=_controller_with(_bg("aaa111", "alice"))))
+    resp = client.post("/api/control/pause", json={"key": "ghost"})
+    assert resp.status_code == 400 and resp.json()["ok"] is False
+
+
+# ---------------------------------------------------------------------------
 # Integration — a REAL background session rendered through the dashboard
 # ---------------------------------------------------------------------------
 

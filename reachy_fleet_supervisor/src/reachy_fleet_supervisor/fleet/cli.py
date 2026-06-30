@@ -16,10 +16,15 @@ Commands::
     fleet status [key]       # one poll of FleetState (text or --json)
     fleet logs <key>         # recent `claude logs` tail for one manager
     fleet stop [key] [--rm]  # stop (and optionally remove) a manager, or --all
+    fleet send <key> <msg>   # steer: message / approve a gate / reassign (U12)
+    fleet pause <key>        # pause a manager (claude stop; conversation kept)
+    fleet resume <key>       # resume a paused/exited manager (claude respawn)
 
 ``key`` is a manager's short id or its voice name. ``--json`` makes any read
-command emit machine-readable output (what tests assert against). The CLI never
-interrupts a running agent — ``status``/``logs`` only read.
+command emit machine-readable output (what tests assert against). The read
+commands (``status``/``logs``) never interrupt a running agent (decision #21);
+the U12 control commands (``send``/``pause``/``resume``/``stop``) are the
+explicit human *write* side.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ import argparse
 from typing import IO, Optional, Sequence
 
 from .state import FleetState, FleetPoller, FleetSnapshot, ManagerSnapshot, tail_logs
+from .control import ControlResult, FleetController
 from .manager import DEFAULT_RUN_MODE, DEFAULT_PERMISSION_MODE, FleetManagerError
 from .session_manager import SessionManager
 
@@ -253,6 +259,44 @@ def cmd_stop(args: argparse.Namespace, out: IO[str], err: IO[str]) -> int:
     return 0
 
 
+def _emit_control_result(result: ControlResult, out: IO[str], err: IO[str], *, as_json: bool) -> int:
+    """Print a :class:`ControlResult` and return its process exit code."""
+    if as_json:
+        json.dump(result.to_dict(), out, indent=2)
+        out.write("\n")
+    elif result.ok:
+        print(result.detail or f"{result.action}: ok", file=out)
+    else:
+        print(f"fleet: {result.detail}", file=err)
+    return 0 if result.ok else 2
+
+
+def cmd_send(args: argparse.Namespace, out: IO[str], err: IO[str]) -> int:
+    """Steer one manager: send a message / approve a gate / reassign it.
+
+    Uses the decision #16 path (``claude --resume <sessionId> -p <message>``) for
+    background managers; prints the manager's reply.
+    """
+    sm = _load_session_manager(args)
+    controller = FleetController(sm)
+    result = controller.send(args.key, args.message)
+    return _emit_control_result(result, out, err, as_json=args.as_json)
+
+
+def cmd_pause(args: argparse.Namespace, out: IO[str], err: IO[str]) -> int:
+    """Pause one manager (``claude stop``; conversation kept, resumable)."""
+    sm = _load_session_manager(args)
+    result = FleetController(sm).pause(args.key)
+    return _emit_control_result(result, out, err, as_json=args.as_json)
+
+
+def cmd_resume(args: argparse.Namespace, out: IO[str], err: IO[str]) -> int:
+    """Resume one paused/exited manager (``claude respawn``)."""
+    sm = _load_session_manager(args)
+    result = FleetController(sm).resume(args.key)
+    return _emit_control_result(result, out, err, as_json=args.as_json)
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -331,6 +375,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_stop.add_argument("--all", dest="stop_all", action="store_true", help="Stop every tracked manager.")
     p_stop.add_argument("--rm", dest="remove", action="store_true", help="Also remove from the roster (claude rm).")
     p_stop.set_defaults(func=cmd_stop)
+
+    p_send = sub.add_parser(
+        "send",
+        parents=[parent],
+        help="Steer a manager: send a message / approve a gate / reassign (claude --resume -p).",
+    )
+    p_send.add_argument("key", help="Manager id or name.")
+    p_send.add_argument("message", help="The message/instruction to inject into the manager's conversation.")
+    p_send.set_defaults(func=cmd_send)
+
+    p_pause = sub.add_parser("pause", parents=[parent], help="Pause a manager (claude stop; conversation kept).")
+    p_pause.add_argument("key", help="Manager id or name.")
+    p_pause.set_defaults(func=cmd_pause)
+
+    p_resume = sub.add_parser("resume", parents=[parent], help="Resume a paused/exited manager (claude respawn).")
+    p_resume.add_argument("key", help="Manager id or name.")
+    p_resume.set_defaults(func=cmd_resume)
 
     return parser
 
