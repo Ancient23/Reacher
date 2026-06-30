@@ -28,8 +28,8 @@ import json
 import argparse
 from typing import IO, Optional, Sequence
 
-from .manager import DEFAULT_PERMISSION_MODE, FleetManagerError
 from .state import FleetState, FleetPoller, FleetSnapshot, ManagerSnapshot, tail_logs
+from .manager import DEFAULT_RUN_MODE, DEFAULT_PERMISSION_MODE, FleetManagerError
 from .session_manager import SessionManager
 
 
@@ -160,6 +160,7 @@ def cmd_spawn(args: argparse.Namespace, out: IO[str], err: IO[str]) -> int:
         args.task,
         name=args.name,
         cwd=args.cwd,
+        run_mode=args.run_mode,
         model=args.model,
         permission_mode=args.permission_mode,
         mcp_configs=args.mcp_configs,
@@ -167,13 +168,20 @@ def cmd_spawn(args: argparse.Namespace, out: IO[str], err: IO[str]) -> int:
     )
     if args.as_json:
         json.dump(
-            {"id": mgr.id, "name": mgr.name, "session_id": mgr.session_id, "cwd": mgr.cwd},
+            {
+                "id": mgr.id,
+                "name": mgr.name,
+                "session_id": mgr.session_id,
+                "cwd": mgr.cwd,
+                "run_mode": mgr.run_mode,
+            },
             out,
             indent=2,
         )
         out.write("\n")
     else:
-        print(f"spawned '{mgr.name}' [{mgr.id}] (session {mgr.session_id})", file=out)
+        mode_note = "" if mgr.run_mode == "background" else f" [{mgr.run_mode}]"
+        print(f"spawned '{mgr.name}' [{mgr.id}]{mode_note} (session {mgr.session_id})", file=out)
     return 0
 
 
@@ -274,6 +282,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_spawn.add_argument("--name", required=True, help="Unique voice/handle name for the manager.")
     p_spawn.add_argument("--cwd", default=None, help="Working directory to spawn in.")
     p_spawn.add_argument("--model", default=None, help="Model override.")
+    p_spawn.add_argument(
+        "--run-mode",
+        dest="run_mode",
+        choices=["background", "remote-control"],
+        default=DEFAULT_RUN_MODE,
+        help=(
+            f"How the manager is hosted (default: {DEFAULT_RUN_MODE}). "
+            "'background' = durable claude --bg (roster-visible); 'remote-control' = a "
+            "claude.ai/mobile-steerable session (separate must-stay-alive process)."
+        ),
+    )
     p_spawn.add_argument(
         "--permission-mode",
         default=DEFAULT_PERMISSION_MODE,

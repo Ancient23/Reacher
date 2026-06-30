@@ -37,13 +37,19 @@ from pathlib import Path
 import tomllib
 from pydantic import Field, BaseModel, ConfigDict, field_validator, model_validator
 
-from .manager import DEFAULT_PERMISSION_MODE, VALID_PERMISSION_MODES
+from .manager import (
+    VALID_RUN_MODES,
+    DEFAULT_RUN_MODE,
+    VALID_PERMISSION_MODES,
+    DEFAULT_PERMISSION_MODE,
+    RunMode,
+)
 
 
-# Per-manager run mode (decision #19): how the session runs, independent of what
-# work pattern it executes. ``background`` = ``claude --bg`` (durable, the
-# default); ``remote-control`` = a claude.ai/mobile-steerable session.
-RunMode = Literal["background", "remote-control"]
+# ``RunMode`` (per-manager hosting: ``background`` | ``remote-control``, decision
+# #19) is defined in :mod:`.manager` — the single source of truth shared by the
+# spawn path and this config — and re-exported here (used by ``ProjectDefaults``
+# and ``FleetConfig`` below) for config consumers.
 
 # Gate policy mode (decision #13): autonomous by default; ``gated`` means every
 # gate trigger pauses for the human, not just the ones in ``escalate_on``.
@@ -127,12 +133,14 @@ class ProjectDefaults(_StrictModel):
     A project may override the fleet-wide gate policy via ``gate_policy``; when
     unset the fleet default applies (resolved by ``FleetConfig.gate_policy_for``).
     Likewise ``permission_mode`` overrides the fleet-wide default
-    (``FleetConfig.permission_mode``, resolved by ``permission_mode_for``); when
-    unset the fleet default applies. A spawned manager has no TTY, so a mode that
-    still prompts deadlocks it — see ``manager.DEFAULT_PERMISSION_MODE``.
+    (``FleetConfig.permission_mode``, resolved by ``permission_mode_for``) and
+    ``run_mode`` overrides the fleet-wide default (``FleetConfig.run_mode``,
+    resolved by ``run_mode_for``); when either is unset (``None``) the fleet
+    default applies. A spawned manager has no TTY, so a permission mode that still
+    prompts deadlocks it — see ``manager.DEFAULT_PERMISSION_MODE``.
     """
 
-    run_mode: RunMode = "background"
+    run_mode: RunMode | None = None
     model: str | None = None
     permission_mode: str | None = None
     gate_policy: GatePolicy | None = None
@@ -199,6 +207,7 @@ class FleetConfig(_StrictModel):
     projects: list[ProjectConfig] = Field(default_factory=list)
     default_gate_policy: GatePolicy = Field(default_factory=GatePolicy)
     permission_mode: str = DEFAULT_PERMISSION_MODE
+    run_mode: RunMode = DEFAULT_RUN_MODE
 
     @field_validator("permission_mode")
     @classmethod
@@ -206,6 +215,15 @@ class FleetConfig(_StrictModel):
         if value not in VALID_PERMISSION_MODES:
             raise ValueError(
                 f"invalid permission_mode {value!r}; valid: {sorted(VALID_PERMISSION_MODES)}"
+            )
+        return value
+
+    @field_validator("run_mode")
+    @classmethod
+    def _valid_run_mode(cls, value: str) -> str:
+        if value not in VALID_RUN_MODES:
+            raise ValueError(
+                f"invalid run_mode {value!r}; valid: {sorted(VALID_RUN_MODES)}"
             )
         return value
 
@@ -234,6 +252,14 @@ class FleetConfig(_StrictModel):
         """Effective ``--permission-mode`` for a project: override or fleet default."""
         override = self.project(name).defaults.permission_mode
         return override if override is not None else self.permission_mode
+
+    def run_mode_for(self, name: str) -> str:
+        """Effective ``run_mode`` for a project: its override or the fleet default.
+
+        A voice request still overrides both at spawn time (``resolve_run_mode``).
+        """
+        override = self.project(name).defaults.run_mode
+        return override if override is not None else self.run_mode
 
 
 def load_fleet_config(path: str | Path) -> FleetConfig:

@@ -249,6 +249,18 @@ is just a subscriber to FleetState. Nothing polls the workers directly.
       steer from claude.ai/mobile**. "All background," "one phone-steerable," or any mix all fall out
       of this single knob. Run-mode is **orthogonal** to the manager's work pattern (single goal /
       dynamic workflow loop / ralph loop / subagent team).
+    *Implemented in **U11** (Phase 3).* The `run_mode` knob (`background` | `remote-control`, default
+    `background`) flows through `FleetManager.spawn` / `SessionManager.spawn`, the fleet config
+    (`[fleet].run_mode` + per-project `defaults.run_mode`, resolved by `run_mode_for`; per-spawn
+    `FLEET_RUN_MODE` / `resolve_run_mode`), the `fleet spawn --run-mode` CLI, and the `spawn_manager`
+    voice tool. **Both RC command forms verified against Claude Code 2.1.196** (`claude --help`,
+    `claude remote-control --help`) — NOT invented: interactive per-manager `claude --remote-control
+    <name> … <task>` (`build_spawn_argv`, launched detached since it must stay alive) and the
+    server-mode host `claude remote-control --spawn {same-dir|worktree|session} --capacity N …`
+    (`build_remote_control_server_argv`). RC is **not** roster-visible (no `agents --json` row, no
+    `claude stop`), so an RC manager's teardown terminates its launched process. The **RC live-connect**
+    (claude.ai/mobile actually steering the session) needs full claude.ai OAuth + a live session and is
+    a HUMAN_GATE — the command assembly + model wiring are software-tested.
 20. **Voice interaction contract for launching coding jobs (persona behavior):**
     (a) **Confirm before kickoff** — when asked to code, Reachy reads back the resolved settings
     (task summary + `location` + `run_mode` + any non-default gate policy) and waits for a spoken OK

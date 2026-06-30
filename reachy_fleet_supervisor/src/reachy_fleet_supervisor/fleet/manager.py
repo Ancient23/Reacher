@@ -37,9 +37,9 @@ import uuid
 import shutil
 import logging
 import subprocess
-from typing import Optional, Sequence
+from typing import Literal, Callable, Optional, Sequence
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import field, dataclass
 
 
 logger = logging.getLogger(__name__)
@@ -74,6 +74,29 @@ DEFAULT_PERMISSION_MODE = "bypassPermissions"
 # Env var that overrides the built-in default for the live/voice spawn path
 # (mirrors claude_brain.py's WorkerSession knob). A per-spawn argument still wins.
 PERMISSION_MODE_ENV = "FLEET_PERMISSION_MODE"
+
+# Per-manager run mode (decision #19). How a manager session is HOSTED, which is
+# orthogonal to the work pattern it runs:
+#   "background"     -> ``claude --bg``: supervisor-durable, survives sleep/restart,
+#                       observed via ``claude agents --json``, steered by Reachy's
+#                       voice. The fleet backbone and the default — the whole of Phase 2.
+#   "remote-control" -> ``claude --remote-control``: a claude.ai/mobile-STEERABLE
+#                       session. Per decision #16 it does NOT compose with ``--bg``
+#                       (passing both, ``--bg`` silently wins) and needs FULL claude.ai
+#                       OAuth, so it is a SEPARATE, must-stay-alive interactive process
+#                       and is NOT roster-visible the way a ``--bg`` manager is.
+RunMode = Literal["background", "remote-control"]
+VALID_RUN_MODES: frozenset[str] = frozenset({"background", "remote-control"})
+DEFAULT_RUN_MODE: RunMode = "background"
+
+# Env var that overrides the built-in default run mode (a per-spawn arg still wins).
+RUN_MODE_ENV = "FLEET_RUN_MODE"
+
+# ``claude remote-control`` SERVER-mode --spawn choices (verified vs
+# ``claude remote-control --help`` on 2.1.196). The server is one long-lived host
+# that serves N claude.ai/mobile-steered sessions (decision #19).
+VALID_RC_SPAWN_MODES: frozenset[str] = frozenset({"same-dir", "worktree", "session"})
+DEFAULT_RC_SPAWN_MODE = "worktree"
 
 # Default timeouts (seconds). Spawn returns immediately but allow headroom for
 # the daemon to start; stop/rm/list are quick.
@@ -135,24 +158,64 @@ def resolve_permission_mode(override: Optional[str] = None) -> str:
     return validate_permission_mode(candidate)
 
 
+def validate_run_mode(mode: str) -> str:
+    """Return *mode* if it is a valid :data:`RunMode`, else raise.
+
+    Guards against typos / invented run modes before they reach a spawn path.
+    """
+    cleaned = (mode or "").strip()
+    if cleaned not in VALID_RUN_MODES:
+        raise FleetManagerError(
+            f"invalid run mode {mode!r}; valid values are {sorted(VALID_RUN_MODES)}"
+        )
+    return cleaned
+
+
+def resolve_run_mode(override: Optional[str] = None) -> str:
+    """Resolve the effective run mode for a spawn.
+
+    Precedence (highest first): explicit *override*, then the ``FLEET_RUN_MODE``
+    environment variable, then :data:`DEFAULT_RUN_MODE` (``background``). The
+    result is validated. This is the single knob the voice ``spawn_manager`` tool
+    and the CLI use so the default is the durable background backbone but the user
+    can ask for a steerable remote-control session per task.
+    """
+    candidate = override if (override and override.strip()) else os.getenv(RUN_MODE_ENV)
+    candidate = candidate if (candidate and candidate.strip()) else DEFAULT_RUN_MODE
+    return validate_run_mode(candidate)
+
+
 def build_spawn_argv(
     task: str,
     *,
     name: str,
     session_id: str,
+    run_mode: str = DEFAULT_RUN_MODE,
     permission_mode: str = DEFAULT_PERMISSION_MODE,
     model: Optional[str] = None,
     mcp_configs: Sequence[str] = (),
     worktree: Optional[str | bool] = None,
+    remote_control_name_prefix: Optional[str] = None,
     extra_args: Sequence[str] = (),
     claude_bin: str = "claude",
 ) -> list[str]:
-    """Build the ``claude --bg …`` argv for spawning one manager.
+    """Build the ``claude`` argv for spawning one manager in the given *run_mode*.
+
+    Two hosting modes (decision #19), each verified vs ``claude --help`` on Claude
+    Code 2.1.196 — these are NOT combinable on one session:
+
+    - ``run_mode="background"`` -> ``claude --bg --name <name> --session-id <id>
+      --permission-mode <mode> … <task>`` (the durable, roster-visible backbone).
+    - ``run_mode="remote-control"`` -> ``claude --remote-control <name>
+      --session-id <id> --permission-mode <mode> … <task>``: an interactive,
+      claude.ai/mobile-steerable session. NO ``--bg`` (they don't compose). The
+      manager *name* is passed as the Remote Control session name shown in
+      claude.ai; ``remote_control_name_prefix`` maps to
+      ``--remote-control-session-name-prefix``.
 
     ``worktree`` may be ``True`` (``-w`` with an auto name), a string (``-w
-    <name>``), or ``None``/``False`` (omit — background sessions still
-    auto-isolate into ``.claude/worktrees/`` on first edit). ``mcp_configs`` and
-    ``extra_args`` are appended verbatim. The ``task`` prompt is always last.
+    <name>``), or ``None``/``False`` (omit). ``mcp_configs`` and ``extra_args``
+    are appended verbatim. The ``task`` prompt is always last.
     """
     if not task or not task.strip():
         raise FleetManagerError("manager task/prompt must not be empty")
@@ -160,19 +223,35 @@ def build_spawn_argv(
         raise FleetManagerError("manager name must not be empty")
     if not session_id or not session_id.strip():
         raise FleetManagerError("manager session_id must not be empty")
-    # Fail loudly here rather than letting the CLI reject an invalid mode.
+    # Fail loudly here rather than letting the CLI reject an invalid value.
+    run_mode = validate_run_mode(run_mode)
     permission_mode = validate_permission_mode(permission_mode)
 
-    argv: list[str] = [
-        claude_bin,
-        "--bg",
-        "--name",
-        name,
-        "--session-id",
-        session_id,
-        "--permission-mode",
-        permission_mode,
-    ]
+    if run_mode == "remote-control":
+        # Interactive Remote Control session (claude.ai/mobile-steerable). The
+        # optional [name] for --remote-control becomes the steering session name.
+        argv: list[str] = [
+            claude_bin,
+            "--remote-control",
+            name,
+            "--session-id",
+            session_id,
+            "--permission-mode",
+            permission_mode,
+        ]
+        if remote_control_name_prefix:
+            argv += ["--remote-control-session-name-prefix", remote_control_name_prefix]
+    else:  # background — the durable, roster-visible backbone
+        argv = [
+            claude_bin,
+            "--bg",
+            "--name",
+            name,
+            "--session-id",
+            session_id,
+            "--permission-mode",
+            permission_mode,
+        ]
     if model:
         argv += ["--model", model]
     for cfg in mcp_configs:
@@ -183,6 +262,49 @@ def build_spawn_argv(
         argv += ["-w", worktree]
     argv += list(extra_args)
     argv += [task]
+    return argv
+
+
+def build_remote_control_server_argv(
+    *,
+    name: Optional[str] = None,
+    spawn: str = DEFAULT_RC_SPAWN_MODE,
+    capacity: Optional[int] = None,
+    permission_mode: str = DEFAULT_PERMISSION_MODE,
+    name_prefix: Optional[str] = None,
+    extra_args: Sequence[str] = (),
+    claude_bin: str = "claude",
+) -> list[str]:
+    """Assemble the Remote Control SERVER-mode host argv: ``claude remote-control …``.
+
+    Server mode (decision #19) is a single, long-lived host that serves up to N
+    claude.ai/mobile-steered sessions — it takes NO task/prompt (sessions are
+    started from claude.ai). Flags verified vs ``claude remote-control --help`` on
+    Claude Code 2.1.196: ``--spawn {same-dir,worktree,session}``, ``--capacity N``,
+    ``--name``, ``--permission-mode``, ``--remote-control-session-name-prefix``.
+
+    Like the interactive form it needs full claude.ai OAuth and is a separate,
+    must-stay-alive process (kept alive by the launcher) — NOT roster-visible.
+    """
+    permission_mode = validate_permission_mode(permission_mode)
+    cleaned_spawn = (spawn or "").strip()
+    if cleaned_spawn not in VALID_RC_SPAWN_MODES:
+        raise FleetManagerError(
+            f"invalid remote-control --spawn mode {spawn!r}; valid values are "
+            f"{sorted(VALID_RC_SPAWN_MODES)}"
+        )
+    if capacity is not None and capacity < 1:
+        raise FleetManagerError(f"remote-control --capacity must be >= 1, got {capacity!r}")
+
+    argv: list[str] = [claude_bin, "remote-control", "--spawn", cleaned_spawn]
+    if capacity is not None:
+        argv += ["--capacity", str(capacity)]
+    if name:
+        argv += ["--name", name]
+    if name_prefix:
+        argv += ["--remote-control-session-name-prefix", name_prefix]
+    argv += ["--permission-mode", permission_mode]
+    argv += list(extra_args)
     return argv
 
 
@@ -330,6 +452,42 @@ def list_agents(
     return parse_agents_json(proc.stdout)
 
 
+# A launcher starts a long-lived (interactive) process from an argv and returns a
+# handle to it (a ``Popen``, or any object exposing ``poll``/``terminate``). It is
+# injectable so the remote-control spawn path is software-testable WITHOUT a live
+# claude.ai session (tests pass a fake that records the argv).
+RemoteControlLauncher = Callable[..., "subprocess.Popen[str]"]
+
+
+def _launch_detached(
+    argv: Sequence[str],
+    *,
+    claude_bin: str = "claude",
+    cwd: Optional[str | Path] = None,
+) -> "subprocess.Popen[str]":
+    """Start *argv* as a detached, non-blocking process and return the ``Popen``.
+
+    Used for the Remote Control run mode: that session is INTERACTIVE and must
+    stay alive (it talks to claude.ai), so unlike a ``--bg`` spawn we must NOT
+    wait on it. We launch it in its own process group so it is not killed by a
+    transient parent and can outlive the spawn call.
+    """
+    binary = resolve_claude_bin(claude_bin)
+    full_argv = [binary, *list(argv)[1:]] if argv and argv[0] == claude_bin else [binary, *argv]
+    cwd_str = str(cwd) if cwd is not None else None
+    logger.info("launching remote-control session: %s (cwd=%s)", full_argv, cwd)
+    if os.name == "nt":
+        # New process group + detached console so the RC session is independent
+        # and survives the spawn call (it must stay alive to talk to claude.ai).
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(
+            subprocess, "DETACHED_PROCESS", 0
+        )
+        return subprocess.Popen(full_argv, cwd=cwd_str, text=True, creationflags=creationflags)
+    return subprocess.Popen(  # pragma: no cover - posix path not exercised on Windows host
+        full_argv, cwd=cwd_str, text=True, start_new_session=True
+    )
+
+
 @dataclass
 class FleetManager:
     """A single Claude Code background manager session.
@@ -345,6 +503,13 @@ class FleetManager:
     cwd: Optional[str] = None
     task: Optional[str] = None
     claude_bin: str = "claude"
+    run_mode: str = DEFAULT_RUN_MODE
+    # For a remote-control manager: the launched, must-stay-alive interactive
+    # process. ``None`` for background managers (those live in the daemon roster
+    # and are controlled via ``claude stop``/``rm``). Excluded from eq/repr.
+    process: Optional["subprocess.Popen[str]"] = field(
+        default=None, compare=False, repr=False
+    )
 
     # ---- construction -----------------------------------------------------
 
@@ -356,31 +521,57 @@ class FleetManager:
         name: str,
         cwd: Optional[str | Path] = None,
         session_id: Optional[str] = None,
+        run_mode: str = DEFAULT_RUN_MODE,
         permission_mode: str = DEFAULT_PERMISSION_MODE,
         model: Optional[str] = None,
         mcp_configs: Sequence[str] = (),
         worktree: Optional[str | bool] = None,
+        remote_control_name_prefix: Optional[str] = None,
         extra_args: Sequence[str] = (),
         claude_bin: str = "claude",
         timeout: float = DEFAULT_SPAWN_TIMEOUT,
         resolve_retries: int = 10,
         resolve_delay: float = 0.3,
+        launcher: Optional[RemoteControlLauncher] = None,
     ) -> "FleetManager":
-        """Spawn a background manager and return a handle to it.
+        """Spawn a manager in the given *run_mode* and return a handle to it.
 
-        The *short id* parsed from the spawn output is authoritative (it is what
-        ``claude stop``/``rm`` accept). The full ``sessionId`` is then resolved
-        from ``claude agents --json`` by matching that short id — NOT assumed
-        from the requested ``--session-id``, because ``claude --bg`` does not
-        always honor a pre-assigned id (verified on 2.1.195/Windows: it mints a
-        fresh UUID). A ``session_id`` is still passed through for setups that do
-        honor it. Raises :class:`FleetManagerError` on spawn or resolve failure.
+        ``run_mode="background"`` (default) shells out to ``claude --bg`` and
+        resolves the durable session from the roster (the Phase-2 backbone).
+        ``run_mode="remote-control"`` dispatches to :meth:`spawn_remote_control`
+        (a claude.ai/mobile-steerable interactive session). Raises
+        :class:`FleetManagerError` on spawn or resolve failure.
+
+        For background: the *short id* parsed from the spawn output is
+        authoritative (it is what ``claude stop``/``rm`` accept). The full
+        ``sessionId`` is then resolved from ``claude agents --json`` by matching
+        that short id — NOT assumed from the requested ``--session-id``, because
+        ``claude --bg`` does not always honor a pre-assigned id (verified on
+        2.1.195/Windows: it mints a fresh UUID).
         """
+        run_mode = validate_run_mode(run_mode)
+        if run_mode == "remote-control":
+            return cls.spawn_remote_control(
+                task,
+                name=name,
+                cwd=cwd,
+                session_id=session_id,
+                permission_mode=permission_mode,
+                model=model,
+                mcp_configs=mcp_configs,
+                worktree=worktree,
+                remote_control_name_prefix=remote_control_name_prefix,
+                extra_args=extra_args,
+                claude_bin=claude_bin,
+                launcher=launcher,
+            )
+
         sid = session_id or str(uuid.uuid4())
         argv = build_spawn_argv(
             task,
             name=name,
             session_id=sid,
+            run_mode="background",
             permission_mode=permission_mode,
             model=model,
             mcp_configs=mcp_configs,
@@ -415,6 +606,70 @@ class FleetManager:
             cwd=resolved.cwd or (str(cwd) if cwd is not None else None),
             task=task,
             claude_bin=claude_bin,
+            run_mode="background",
+        )
+
+    @classmethod
+    def spawn_remote_control(
+        cls,
+        task: str,
+        *,
+        name: str,
+        cwd: Optional[str | Path] = None,
+        session_id: Optional[str] = None,
+        permission_mode: str = DEFAULT_PERMISSION_MODE,
+        model: Optional[str] = None,
+        mcp_configs: Sequence[str] = (),
+        worktree: Optional[str | bool] = None,
+        remote_control_name_prefix: Optional[str] = None,
+        extra_args: Sequence[str] = (),
+        claude_bin: str = "claude",
+        launcher: Optional[RemoteControlLauncher] = None,
+    ) -> "FleetManager":
+        """Launch a Remote Control (claude.ai/mobile-steerable) manager session.
+
+        Remote Control does NOT compose with ``--bg`` (decision #16, verified):
+        it is a separate, must-stay-alive INTERACTIVE process and needs FULL
+        claude.ai OAuth. So unlike a background manager it is NOT registered in
+        ``claude agents --json`` and cannot be resolved/observed there — the
+        live connect is a HUMAN_GATE. We assemble the verified ``claude
+        --remote-control <name> …`` argv (:func:`build_spawn_argv`) and start it
+        as a detached, non-blocking process via *launcher* (default
+        :func:`_launch_detached`; injectable so the command assembly is testable
+        without a live session). The returned handle records
+        ``run_mode="remote-control"`` and keeps the launched process so it can be
+        torn down. The ``session_id`` we pass is the handle's id (no roster to
+        resolve a minted one from).
+        """
+        sid = session_id or str(uuid.uuid4())
+        argv = build_spawn_argv(
+            task,
+            name=name,
+            session_id=sid,
+            run_mode="remote-control",
+            permission_mode=permission_mode,
+            model=model,
+            mcp_configs=mcp_configs,
+            worktree=worktree,
+            remote_control_name_prefix=remote_control_name_prefix,
+            extra_args=extra_args,
+            claude_bin=claude_bin,
+        )
+        launch = launcher or _launch_detached
+        process = launch(argv, claude_bin=claude_bin, cwd=cwd)
+        logger.info(
+            "launched remote-control manager '%s' (session=%s) — steer it from claude.ai",
+            name, sid,
+        )
+        return cls(
+            session_id=sid,
+            id=short_id_for(sid),
+            name=name,
+            cwd=str(cwd) if cwd is not None else None,
+            task=task,
+            claude_bin=claude_bin,
+            run_mode="remote-control",
+            process=process,
         )
 
     @classmethod
@@ -466,13 +721,22 @@ class FleetManager:
 
     # ---- observation ------------------------------------------------------
 
+    @property
+    def is_remote_control(self) -> bool:
+        """True if this is a ``--remote-control`` session (not a ``--bg`` agent)."""
+        return self.run_mode == "remote-control"
+
     def info(
         self, *, include_all: bool = True, timeout: float = DEFAULT_CONTROL_TIMEOUT
     ) -> Optional[AgentInfo]:
         """Return this manager's live :class:`AgentInfo`, or ``None`` if gone.
 
         Matches on ``session_id`` (stable) and falls back to the short ``id``.
+        Remote-control managers are never in the ``claude agents --json`` roster,
+        so this always returns ``None`` for them (use :meth:`is_running`).
         """
+        if self.is_remote_control:
+            return None
         for agent in list_agents(
             include_all=include_all, claude_bin=self.claude_bin, timeout=timeout
         ):
@@ -481,16 +745,49 @@ class FleetManager:
         return None
 
     def is_running(self, *, timeout: float = DEFAULT_CONTROL_TIMEOUT) -> bool:
-        """Return True if this manager appears as an active background session."""
+        """Return True if this manager is alive.
+
+        Background: it appears as an active background session in the roster.
+        Remote-control: its launched, must-stay-alive process has not exited.
+        """
+        if self.is_remote_control:
+            return self.process is not None and self.process.poll() is None
         agent = self.info(include_all=False, timeout=timeout)
         return agent is not None and agent.is_background
 
     # ---- control ----------------------------------------------------------
 
+    def terminate_process(self, *, timeout: float = DEFAULT_CONTROL_TIMEOUT) -> None:
+        """Terminate a remote-control session's launched process (best-effort).
+
+        Background managers have no attached process — this is a no-op for them
+        (they are stopped via :meth:`stop`/``claude stop``).
+        """
+        proc = self.process
+        if proc is None:
+            return
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        except Exception:  # noqa: BLE001 — teardown must never raise
+            logger.debug("terminate of remote-control process failed", exc_info=True)
+
     def stop(
         self, *, check: bool = True, timeout: float = DEFAULT_CONTROL_TIMEOUT
-    ) -> subprocess.CompletedProcess[str]:
-        """Stop the session (``claude stop <id>``). Conversation/state persist."""
+    ) -> Optional[subprocess.CompletedProcess[str]]:
+        """Stop the session. Conversation/state persist.
+
+        Background: ``claude stop <id>``. Remote-control: terminate the launched
+        interactive process (there is no ``claude stop`` for an RC session) and
+        return ``None``.
+        """
+        if self.is_remote_control:
+            self.terminate_process(timeout=timeout)
+            return None
         return _run_claude(
             ["stop", self.id], claude_bin=self.claude_bin, timeout=timeout, check=check
         )
@@ -508,7 +805,14 @@ class FleetManager:
         )
 
     def stop_and_remove(self, *, timeout: float = DEFAULT_CONTROL_TIMEOUT) -> None:
-        """Best-effort teardown: stop then remove, tolerating an already-gone session."""
+        """Best-effort teardown: stop then remove, tolerating an already-gone session.
+
+        For a remote-control manager there is no roster row to ``claude rm``;
+        terminating its process (via :meth:`stop`) is the whole teardown.
+        """
+        if self.is_remote_control:
+            self.stop(check=False, timeout=timeout)
+            return
         try:
             self.stop(check=False, timeout=timeout)
         finally:

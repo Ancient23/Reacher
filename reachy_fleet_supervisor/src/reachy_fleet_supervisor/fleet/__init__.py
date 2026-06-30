@@ -64,9 +64,9 @@ from .state import (
     FleetPoller,
     FleetSnapshot,
     ManagerSnapshot,
+    tail_logs,
     strip_ansi,
     sanitize_lines,
-    tail_logs,
 )
 from .config import (
     RunMode,
@@ -99,20 +99,35 @@ from .status import (
     read_statuses_for_agents,
 )
 from .manager import (
-    DEFAULT_PERMISSION_MODE,
+    RUN_MODE_ENV,
+    VALID_RUN_MODES,
+    DEFAULT_RUN_MODE,
     PERMISSION_MODE_ENV,
+    VALID_RC_SPAWN_MODES,
+    DEFAULT_RC_SPAWN_MODE,
     VALID_PERMISSION_MODES,
+    DEFAULT_PERMISSION_MODE,
     AgentInfo,
     FleetManager,
     FleetManagerError,
     list_agents,
     short_id_for,
     build_spawn_argv,
+    resolve_run_mode,
     parse_agents_json,
+    validate_run_mode,
     parse_spawn_output,
     resolve_claude_bin,
     resolve_permission_mode,
     validate_permission_mode,
+    build_remote_control_server_argv,
+)
+from .runtime import (
+    FleetRuntime,
+    get_fleet_runtime,
+    set_fleet_runtime,
+    build_fleet_runtime,
+    mount_fleet_dashboard,
 )
 from .identity import (
     PALETTE,
@@ -129,13 +144,6 @@ from .dashboard import (
 from .session_manager import (
     AgentPredicate,
     SessionManager,
-)
-from .runtime import (
-    FleetRuntime,
-    build_fleet_runtime,
-    get_fleet_runtime,
-    set_fleet_runtime,
-    mount_fleet_dashboard,
 )
 
 
@@ -158,14 +166,22 @@ __all__ = [
     "list_agents",
     "short_id_for",
     "build_spawn_argv",
+    "build_remote_control_server_argv",
     "parse_spawn_output",
     "parse_agents_json",
     "resolve_claude_bin",
+    "resolve_run_mode",
+    "validate_run_mode",
     "resolve_permission_mode",
     "validate_permission_mode",
     "DEFAULT_PERMISSION_MODE",
     "PERMISSION_MODE_ENV",
     "VALID_PERMISSION_MODES",
+    "DEFAULT_RUN_MODE",
+    "RUN_MODE_ENV",
+    "VALID_RUN_MODES",
+    "DEFAULT_RC_SPAWN_MODE",
+    "VALID_RC_SPAWN_MODES",
     # session manager (U3)
     "SessionManager",
     "AgentPredicate",

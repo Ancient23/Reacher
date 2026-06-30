@@ -23,10 +23,11 @@ every control call delegates to the wrapped :class:`FleetManager`.
 
 from __future__ import annotations
 import logging
-from typing import Callable, Iterator, Optional, Sequence
+from typing import Any, Callable, Iterator, Optional, Sequence
 from pathlib import Path
 
 from .manager import (
+    DEFAULT_RUN_MODE,
     DEFAULT_PERMISSION_MODE,
     AgentInfo,
     FleetManager,
@@ -137,18 +138,22 @@ class SessionManager:
         name: str,
         cwd: Optional[str | Path] = None,
         session_id: Optional[str] = None,
+        run_mode: str = DEFAULT_RUN_MODE,
         permission_mode: str = DEFAULT_PERMISSION_MODE,
         model: Optional[str] = None,
         mcp_configs: Sequence[str] = (),
         worktree: Optional[str | bool] = None,
         extra_args: Sequence[str] = (),
-        **spawn_kwargs: object,
+        **spawn_kwargs: Any,
     ) -> FleetManager:
-        """Spawn a new background manager and track it.
+        """Spawn a new manager (in *run_mode*) and track it.
 
         ``name`` must not collide with an already-tracked manager (it is the
-        voice handle). All other arguments pass through to
-        :meth:`FleetManager.spawn`. The new handle is registered and returned.
+        voice handle). ``run_mode`` selects the durable ``background`` backbone
+        (default) or a ``remote-control`` steerable session. All other arguments
+        pass through to :meth:`FleetManager.spawn` (e.g. ``launcher`` /
+        ``remote_control_name_prefix`` for remote-control). The new handle is
+        registered and returned.
         """
         if any(m.name == name for m in self._by_id.values()):
             raise FleetManagerError(
@@ -159,13 +164,14 @@ class SessionManager:
             name=name,
             cwd=cwd,
             session_id=session_id,
+            run_mode=run_mode,
             permission_mode=permission_mode,
             model=model,
             mcp_configs=mcp_configs,
             worktree=worktree,
             extra_args=extra_args,
             claude_bin=self.claude_bin,
-            **spawn_kwargs,  # e.g. timeout / resolve_retries / resolve_delay
+            **spawn_kwargs,  # e.g. timeout / resolve_retries / launcher
         )
         return self.adopt(manager)
 

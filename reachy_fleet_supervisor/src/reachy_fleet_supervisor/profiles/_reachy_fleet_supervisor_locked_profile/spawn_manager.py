@@ -17,14 +17,14 @@ purpose:
 """
 
 from __future__ import annotations
-
+import os
 import asyncio
 import logging
-import os
-from pathlib import Path
 from typing import Any, Dict
+from pathlib import Path
 
 from reachy_fleet_supervisor.tools.core_tools import Tool, ToolDependencies
+
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,17 @@ class SpawnManager(Tool):
             "task": {
                 "type": "string",
                 "description": "What the manager should do, described in plain language.",
+            },
+            "run_mode": {
+                "type": "string",
+                "enum": ["background", "remote-control"],
+                "description": (
+                    "Optional. How the manager is hosted. Leave unset for 'background' (a durable "
+                    "claude --bg session you watch on the dashboard and Reachy's body, steered by "
+                    "voice). Use 'remote-control' ONLY if the user explicitly asks to watch/steer "
+                    "it from claude.ai or their phone — that is a separate steerable session that "
+                    "needs claude.ai login and does NOT appear on the fleet dashboard."
+                ),
             },
             "permission_mode": {
                 "type": "string",
@@ -95,10 +106,12 @@ class SpawnManager(Tool):
         # reported U10 bug. bypassPermissions runs it non-interactively.
         from reachy_fleet_supervisor.fleet.manager import (
             FleetManagerError,
+            resolve_run_mode,
             resolve_permission_mode,
         )
 
         try:
+            run_mode = resolve_run_mode(kwargs.get("run_mode"))
             permission_mode = resolve_permission_mode(kwargs.get("permission_mode"))
         except FleetManagerError as e:
             return {"error": str(e)}
@@ -107,28 +120,43 @@ class SpawnManager(Tool):
             from reachy_fleet_supervisor.fleet.runtime import get_fleet_runtime
 
             runtime = get_fleet_runtime()
-            # spawn() shells out to `claude --bg` (blocking) — keep it off the loop.
+            # spawn() shells out (background) or launches a detached RC session —
+            # blocking either way, so keep it off the event loop.
             manager = await asyncio.to_thread(
                 lambda: runtime.session_manager.spawn(
-                    task, name=name, cwd=cwd, permission_mode=permission_mode
+                    task,
+                    name=name,
+                    cwd=cwd,
+                    run_mode=run_mode,
+                    permission_mode=permission_mode,
                 )
             )
             # Nudge an immediate poll so the dashboard/body update without waiting
             # for the next interval. Best-effort: the loop will catch up regardless.
+            # (Remote-control managers aren't roster-visible, so this is a no-op for
+            # them, but it is harmless and keeps the background path snappy.)
             try:
                 await asyncio.to_thread(runtime.poller.poll_once)
             except Exception:  # noqa: BLE001
                 logger.debug("post-spawn poll_once failed; poller will catch up", exc_info=True)
 
             logger.info(
-                "spawn_manager: spawned '%s' (id=%s, permission_mode=%s) on %s",
-                manager.name, manager.id, permission_mode, cwd,
+                "spawn_manager: spawned '%s' (id=%s, run_mode=%s, permission_mode=%s) on %s",
+                manager.name, manager.id, run_mode, permission_mode, cwd,
             )
+            if run_mode == "remote-control":
+                result = (
+                    f"Started a remote-control manager {manager.name} you can watch and steer "
+                    "from claude.ai or your phone. It won't show on the fleet dashboard."
+                )
+            else:
+                result = f"Spawned manager {manager.name} on the project. Watch it on the dashboard."
             return {
                 "status": "spawned",
                 "name": manager.name,
                 "id": manager.id,
-                "result": f"Spawned manager {manager.name} on the project. Watch it on the dashboard.",
+                "run_mode": run_mode,
+                "result": result,
             }
         except Exception as e:  # noqa: BLE001
             logger.exception("spawn_manager failed")

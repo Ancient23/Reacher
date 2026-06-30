@@ -31,9 +31,9 @@ def test_empty_fleet_has_sensible_defaults() -> None:
 
 
 def test_project_defaults() -> None:
-    """A bare project defaults to background run mode and empty collections."""
+    """A bare project leaves run_mode/model/permission_mode unset (inherit fleet)."""
     project = ProjectConfig(name="p", path="/tmp/p")
-    assert project.defaults.run_mode == "background"
+    assert project.defaults.run_mode is None  # unset → inherit fleet default
     assert project.defaults.model is None
     assert project.defaults.permission_mode is None
     assert project.defaults.gate_policy is None
@@ -86,6 +86,48 @@ def test_invalid_project_permission_mode_rejected() -> None:
         parse_fleet_config(
             {"projects": [{"name": "a", "path": "/x", "defaults": {"permission_mode": "nope"}}]}
         )
+
+
+# ---------------------------------------------------------------------------
+# run_mode (U11) — fleet-wide default + per-project resolution
+# ---------------------------------------------------------------------------
+
+
+def test_fleet_default_run_mode_is_background() -> None:
+    assert FleetConfig().run_mode == "background"
+
+
+def test_custom_fleet_default_run_mode_honored() -> None:
+    cfg = parse_fleet_config({"run_mode": "remote-control", "projects": []})
+    assert cfg.run_mode == "remote-control"
+
+
+def test_invalid_fleet_run_mode_rejected() -> None:
+    with pytest.raises(FleetConfigError):
+        parse_fleet_config({"run_mode": "server", "projects": []})
+
+
+def test_run_mode_for_uses_fleet_default_when_project_unset() -> None:
+    """A project that leaves run_mode at the shared default inherits the fleet default."""
+    cfg = parse_fleet_config(
+        {"run_mode": "remote-control", "projects": [{"name": "a", "path": "/x"}]}
+    )
+    assert cfg.run_mode_for("a") == "remote-control"
+
+
+def test_run_mode_for_project_override_wins() -> None:
+    """A project's explicit run_mode overrides the fleet-wide default."""
+    cfg = parse_fleet_config(
+        {
+            "run_mode": "remote-control",
+            "projects": [
+                {"name": "a", "path": "/x", "defaults": {"run_mode": "background"}},
+                {"name": "b", "path": "/y"},
+            ],
+        }
+    )
+    assert cfg.run_mode_for("a") == "background"  # explicit project override
+    assert cfg.run_mode_for("b") == "remote-control"  # fleet default
 
 
 # ---------------------------------------------------------------------------

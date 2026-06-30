@@ -16,15 +16,15 @@ import shutil
 
 import pytest
 
-from reachy_fleet_supervisor.fleet import cli
-from reachy_fleet_supervisor.fleet import state as state_mod
-from reachy_fleet_supervisor.fleet import session_manager as sm_mod
 from reachy_fleet_supervisor.fleet import (
     AgentInfo,
     FleetManager,
     ManagerStatus,
+    cli,
     write_status,
 )
+from reachy_fleet_supervisor.fleet import state as state_mod
+from reachy_fleet_supervisor.fleet import session_manager as sm_mod
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +226,42 @@ def test_spawn_json_passes_args(monkeypatch) -> None:
     assert captured["worktree"] is True
 
 
+def test_spawn_run_mode_flows_through(monkeypatch) -> None:
+    """`fleet spawn --run-mode remote-control` passes run_mode to the spawn path."""
+    _patch_roster(monkeypatch, [])
+    captured: dict = {}
+
+    def fake_spawn(cls, task, *, name, **kwargs):
+        captured.update(kwargs)
+        return FleetManager(
+            session_id="sid-1", id="newid00", name=name, run_mode=kwargs.get("run_mode", "background")
+        )
+
+    monkeypatch.setattr(sm_mod.FleetManager, "spawn", classmethod(fake_spawn))
+    code, out, _ = _run(
+        ["spawn", "watch it", "--name", "phone", "--run-mode", "remote-control", "--json"]
+    )
+    assert code == 0
+    data = json.loads(out)
+    assert data["run_mode"] == "remote-control"
+    assert captured["run_mode"] == "remote-control"
+
+
+def test_spawn_defaults_run_mode_background(monkeypatch) -> None:
+    """Omitting --run-mode defaults to background."""
+    _patch_roster(monkeypatch, [])
+    captured: dict = {}
+
+    def fake_spawn(cls, task, *, name, **kwargs):
+        captured.update(kwargs)
+        return FleetManager(session_id="sid-1", id="newid00", name=name)
+
+    monkeypatch.setattr(sm_mod.FleetManager, "spawn", classmethod(fake_spawn))
+    code, _, _ = _run(["spawn", "do it", "--name", "w"])
+    assert code == 0
+    assert captured["run_mode"] == "background"
+
+
 def test_spawn_duplicate_name_fails(monkeypatch) -> None:
     """Spawning a name already on the roster is rejected (exit 1)."""
     _patch_roster(monkeypatch, [_bg_row("aaaa1111", "alpha")])
@@ -337,7 +373,7 @@ _HAS_CLAUDE = shutil.which("claude") is not None
 
 @pytest.mark.skipif(not _HAS_CLAUDE, reason="claude CLI not installed")
 def test_real_cli_end_to_end(tmp_path) -> None:
-    """spawn → status → logs → stop --rm, all through cli.main, then assert clean."""
+    """Spawn → status → logs → stop --rm, all through cli.main, then assert clean."""
     name = f"u6-cli-{uuid.uuid4().hex[:8]}"
     spawned_id = None
     try:

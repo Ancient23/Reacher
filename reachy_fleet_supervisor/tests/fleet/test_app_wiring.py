@@ -18,7 +18,6 @@ browser) remains the HUMAN gate in ``docs/roadmap/STATE.yaml``.
 """
 
 from __future__ import annotations
-
 import asyncio
 import importlib.util
 from pathlib import Path
@@ -36,9 +35,9 @@ from reachy_fleet_supervisor.fleet import (  # noqa: E402
     FleetPoller,
     FleetRuntime,
     SessionManager,
-    build_fleet_runtime,
     get_fleet_runtime,
     set_fleet_runtime,
+    build_fleet_runtime,
     create_dashboard_app,
     mount_fleet_dashboard,
 )
@@ -234,6 +233,7 @@ def _capturing_runtime() -> tuple[FleetRuntime, dict]:
             captured["name"] = name
             captured["cwd"] = cwd
             captured["permission_mode"] = permission_mode
+            captured["run_mode"] = kw.get("run_mode")
             return _CapturingManager(name)
 
     state = FleetState()
@@ -302,6 +302,54 @@ def test_voice_spawn_rejects_invalid_permission_mode(
         SpawnManager()(None, name="tester", path=str(tmp_path), task="t", permission_mode="yolo")
     )
     assert "error" in out and "permission mode" in out["error"].lower()
+    assert captured == {}  # never reached spawn
+
+
+def test_voice_spawn_defaults_to_background_run_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No run_mode given → the durable, dashboard-visible background backbone."""
+    monkeypatch.delenv("FLEET_RUN_MODE", raising=False)
+    rt, captured = _capturing_runtime()
+    set_fleet_runtime(rt)
+    SpawnManager = _load_spawn_manager_cls()
+    out = asyncio.run(SpawnManager()(None, name="tester", path=str(tmp_path), task="run tests"))
+    assert out["status"] == "spawned"
+    assert out["run_mode"] == "background"
+    assert captured["run_mode"] == "background"
+
+
+def test_voice_spawn_remote_control_run_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run_mode='remote-control' flows through and the reply explains it won't be on the dashboard."""
+    monkeypatch.delenv("FLEET_RUN_MODE", raising=False)
+    rt, captured = _capturing_runtime()
+    set_fleet_runtime(rt)
+    SpawnManager = _load_spawn_manager_cls()
+    out = asyncio.run(
+        SpawnManager()(
+            None, name="phone", path=str(tmp_path), task="watch this", run_mode="remote-control"
+        )
+    )
+    assert out["status"] == "spawned"
+    assert out["run_mode"] == "remote-control"
+    assert captured["run_mode"] == "remote-control"
+    assert "claude.ai" in out["result"] or "phone" in out["result"].lower()
+
+
+def test_voice_spawn_rejects_invalid_run_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bogus run_mode is reported (spoken back), not spawned."""
+    monkeypatch.delenv("FLEET_RUN_MODE", raising=False)
+    rt, captured = _capturing_runtime()
+    set_fleet_runtime(rt)
+    SpawnManager = _load_spawn_manager_cls()
+    out = asyncio.run(
+        SpawnManager()(None, name="x", path=str(tmp_path), task="t", run_mode="server")
+    )
+    assert "error" in out and "run mode" in out["error"].lower()
     assert captured == {}  # never reached spawn
 
 

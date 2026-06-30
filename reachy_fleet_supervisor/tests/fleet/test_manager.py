@@ -13,18 +13,23 @@ import shutil
 import pytest
 
 from reachy_fleet_supervisor.fleet import (
-    DEFAULT_PERMISSION_MODE,
+    RUN_MODE_ENV,
+    DEFAULT_RUN_MODE,
     PERMISSION_MODE_ENV,
+    DEFAULT_PERMISSION_MODE,
     AgentInfo,
     FleetManager,
     FleetManagerError,
     list_agents,
     short_id_for,
     build_spawn_argv,
+    resolve_run_mode,
     parse_agents_json,
+    validate_run_mode,
     parse_spawn_output,
     resolve_permission_mode,
     validate_permission_mode,
+    build_remote_control_server_argv,
 )
 
 
@@ -121,6 +126,188 @@ def test_build_spawn_argv_rejects_empty_task_name_session() -> None:
         build_spawn_argv("t", name="", session_id="s")
     with pytest.raises(FleetManagerError):
         build_spawn_argv("t", name="m", session_id="")
+
+
+# ---------------------------------------------------------------------------
+# run_mode knob (U11) — argv assembly + validation + resolution
+# ---------------------------------------------------------------------------
+
+
+def test_build_spawn_argv_defaults_to_background() -> None:
+    """No run_mode given → the durable --bg backbone (unchanged default)."""
+    argv = build_spawn_argv("t", name="m", session_id="s")
+    assert "--bg" in argv
+    assert "--remote-control" not in argv
+
+
+def test_build_spawn_argv_remote_control_form() -> None:
+    """run_mode=remote-control → `claude --remote-control <name> … <task>`, NO --bg."""
+    sid = "11111111-2222-3333-4444-555555555555"
+    argv = build_spawn_argv(
+        "do a thing",
+        name="phone",
+        session_id=sid,
+        run_mode="remote-control",
+        remote_control_name_prefix="reacher",
+        model="claude-sonnet-4-6",
+        mcp_configs=["a.json"],
+    )
+    assert "--bg" not in argv, "remote-control must NOT compose with --bg"
+    # --remote-control takes the manager name as its (optional) session name.
+    assert argv[argv.index("--remote-control") + 1] == "phone"
+    assert argv[argv.index("--session-id") + 1] == sid
+    assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
+    assert argv[argv.index("--remote-control-session-name-prefix") + 1] == "reacher"
+    assert argv[argv.index("--model") + 1] == "claude-sonnet-4-6"
+    assert "--mcp-config" in argv and "a.json" in argv
+    assert argv[-1] == "do a thing"  # task is still the final positional
+
+
+def test_build_spawn_argv_rejects_invalid_run_mode() -> None:
+    with pytest.raises(FleetManagerError):
+        build_spawn_argv("t", name="m", session_id="s", run_mode="server")
+
+
+def test_validate_run_mode_accepts_known_and_rejects_unknown() -> None:
+    for mode in ("background", "remote-control"):
+        assert validate_run_mode(mode) == mode
+    with pytest.raises(FleetManagerError):
+        validate_run_mode("nope")
+
+
+def test_resolve_run_mode_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explicit override > $FLEET_RUN_MODE > built-in default (background)."""
+    monkeypatch.delenv(RUN_MODE_ENV, raising=False)
+    assert resolve_run_mode() == DEFAULT_RUN_MODE == "background"
+    assert resolve_run_mode("") == "background"
+    monkeypatch.setenv(RUN_MODE_ENV, "remote-control")
+    assert resolve_run_mode() == "remote-control"
+    assert resolve_run_mode("background") == "background"  # explicit wins over env
+    monkeypatch.setenv(RUN_MODE_ENV, "bogus")
+    with pytest.raises(FleetManagerError):
+        resolve_run_mode()
+
+
+def test_build_remote_control_server_argv_form() -> None:
+    """Server mode: `claude remote-control --spawn worktree --capacity N …` (no task)."""
+    argv = build_remote_control_server_argv(
+        name="host", spawn="worktree", capacity=3, name_prefix="reacher"
+    )
+    assert argv[:2] == ["claude", "remote-control"]
+    assert "--bg" not in argv
+    assert argv[argv.index("--spawn") + 1] == "worktree"
+    assert argv[argv.index("--capacity") + 1] == "3"
+    assert argv[argv.index("--name") + 1] == "host"
+    assert argv[argv.index("--remote-control-session-name-prefix") + 1] == "reacher"
+    assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
+
+
+def test_build_remote_control_server_argv_rejects_bad_spawn_and_capacity() -> None:
+    with pytest.raises(FleetManagerError):
+        build_remote_control_server_argv(spawn="nope")
+    with pytest.raises(FleetManagerError):
+        build_remote_control_server_argv(capacity=0)
+
+
+# ---------------------------------------------------------------------------
+# Remote-control spawn path (U11) — launched via an injected launcher, NO live RC
+# ---------------------------------------------------------------------------
+
+
+class _FakeProcess:
+    """Stand-in for the launched RC ``Popen`` (poll/terminate/wait/kill)."""
+
+    def __init__(self) -> None:
+        self._alive = True
+        self.terminated = False
+
+    def poll(self):
+        return None if self._alive else 0
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self._alive = False
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+    def kill(self) -> None:
+        self._alive = False
+
+
+def test_spawn_remote_control_uses_injected_launcher_and_records_argv() -> None:
+    """The RC spawn assembles the verified argv and launches it (no subprocess)."""
+    seen: dict = {}
+    proc = _FakeProcess()
+
+    def fake_launcher(argv, *, claude_bin, cwd):
+        seen["argv"] = list(argv)
+        seen["cwd"] = cwd
+        return proc
+
+    sid = "abcd1234-0000-0000-0000-000000000000"
+    mgr = FleetManager.spawn_remote_control(
+        "ship it",
+        name="phone",
+        cwd="/proj",
+        session_id=sid,
+        launcher=fake_launcher,
+    )
+    assert mgr.run_mode == "remote-control"
+    assert mgr.is_remote_control
+    assert mgr.id == "abcd1234"
+    assert mgr.process is proc
+    # The launched argv is the verified interactive RC command.
+    assert "--remote-control" in seen["argv"] and "--bg" not in seen["argv"]
+    assert seen["argv"][-1] == "ship it"
+    assert seen["cwd"] == "/proj"
+
+
+def test_spawn_dispatches_to_remote_control_without_subprocess() -> None:
+    """FleetManager.spawn(run_mode='remote-control') routes to the RC launch path."""
+    proc = _FakeProcess()
+    mgr = FleetManager.spawn(
+        "task",
+        name="phone",
+        run_mode="remote-control",
+        launcher=lambda argv, *, claude_bin, cwd: proc,
+    )
+    assert mgr.is_remote_control and mgr.process is proc
+
+
+def test_remote_control_manager_is_not_roster_visible() -> None:
+    """An RC manager is never in `claude agents --json` → info() is None."""
+    mgr = FleetManager(
+        session_id="abcd1234-x", id="abcd1234", name="phone", run_mode="remote-control"
+    )
+    assert mgr.info() is None  # short-circuits before any CLI call
+
+
+def test_remote_control_is_running_tracks_process() -> None:
+    proc = _FakeProcess()
+    mgr = FleetManager(
+        session_id="s", id="abcd1234", name="phone", run_mode="remote-control", process=proc
+    )
+    assert mgr.is_running() is True
+    proc.terminate()
+    assert mgr.is_running() is False
+
+
+def test_remote_control_stop_terminates_process_no_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    """stop()/stop_and_remove() on an RC manager terminate the process, never `claude stop`."""
+    import reachy_fleet_supervisor.fleet.manager as mgr_mod
+
+    def _boom(*a, **k):  # any CLI call would be wrong for an RC session
+        raise AssertionError("RC teardown must not shell out to `claude`")
+
+    monkeypatch.setattr(mgr_mod, "_run_claude", _boom)
+    proc = _FakeProcess()
+    mgr = FleetManager(
+        session_id="s", id="abcd1234", name="phone", run_mode="remote-control", process=proc
+    )
+    assert mgr.stop() is None
+    assert proc.terminated
+    mgr.stop_and_remove()  # idempotent, still no CLI
 
 
 # ---------------------------------------------------------------------------
