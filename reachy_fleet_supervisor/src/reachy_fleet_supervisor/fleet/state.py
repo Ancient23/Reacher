@@ -27,6 +27,7 @@ tracks.
 """
 
 from __future__ import annotations
+import re
 import time
 import logging
 import threading
@@ -61,6 +62,59 @@ DEFAULT_POLL_INTERVAL = 2.0
 # A subscriber is any callable that accepts the latest FleetSnapshot.
 Subscriber = Callable[["FleetSnapshot"], None]
 AgentPredicate = Callable[[AgentInfo], bool]
+
+
+# ---------------------------------------------------------------------------
+# Transcript sanitization (pure) — strip terminal/ANSI noise at ingestion
+# ---------------------------------------------------------------------------
+#
+# ``claude logs <id>`` returns raw *TUI* output: full of ANSI SGR colour codes
+# (``\x1b[38;2;…m``), cursor moves (``\x1b[200C``, ``\x1b[48;3H``), erase-line
+# codes (``\x1b[K``) and private-mode toggles (``\x1b[?25h``). Stored verbatim
+# they render as literal garbage (``[38;2;…m``, ``[K``, ``□`` ESC glyphs) in the
+# dashboard transcript and CLI text view. We strip these at INGESTION (in
+# :meth:`FleetState.apply`) so EVERY renderer — dashboard, CLI, body headline —
+# sees clean text from one place. (The cleaner long-term signal is each
+# manager's own emitted ``status.json`` (U5); this just de-noises the raw tail.)
+
+# CSI/OSC/two-char escape sequences. CSI = ESC ``[`` params(0x30-0x3F)
+# intermediates(0x20-0x2F) final(0x40-0x7E); covers SGR ``m``, cursor
+# ``H/A/B/C/D``, erase ``K/J`` and private modes ``?…h/l``. OSC = ESC ``]`` …
+# terminated by BEL or ST. Plus bare two-char escapes (ESC + one byte).
+_ANSI_ESCAPE_RE = re.compile(
+    r"\x1b\[[0-?]*[ -/]*[@-~]"            # CSI (SGR, cursor, erase, private modes)
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC … BEL/ST
+    r"|\x1b[@-Z\\-_]"                     # two-char escapes
+)
+
+# Stray C0 control bytes left over after escape stripping (lone ESC, etc.),
+# keeping TAB (``\x09``); lines are already newline-split so none are present.
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI/VT escape sequences + stray control bytes from *text*.
+
+    Returns clean, human-legible text (trailing whitespace trimmed). A line that
+    was *only* escapes/control bytes becomes empty.
+    """
+    cleaned = _ANSI_ESCAPE_RE.sub("", text)
+    cleaned = _CONTROL_RE.sub("", cleaned)
+    return cleaned.rstrip()
+
+
+def sanitize_lines(lines: Sequence[str]) -> tuple[str, ...]:
+    """Strip escapes from each line and DROP lines empty after stripping.
+
+    Pure-escape lines (e.g. a lone ``\x1b[K``) collapse to ``""`` and are
+    dropped so the transcript ring buffer isn't full of blank rows.
+    """
+    out: list[str] = []
+    for line in lines:
+        cleaned = strip_ansi(line)
+        if cleaned.strip():
+            out.append(cleaned)
+    return tuple(out)
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +385,9 @@ class FleetState:
             new_transcripts: dict[str, tuple[str, ...]] = {}
             managers: list[ManagerSnapshot] = []
             for agent, key in zip(agents, keys):
-                incoming = logs.get(key, ())
+                # Sanitize raw log tails at ingestion so the transcript ring
+                # buffer (and every renderer reading it) holds clean text only.
+                incoming = sanitize_lines(logs.get(key, ()))
                 merged = _merge_tail(
                     self._transcripts.get(key, ()), incoming, maxlen=self._log_lines
                 )

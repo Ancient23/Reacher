@@ -174,14 +174,41 @@ def render_page(snapshot: FleetSnapshot, *, title: str, poll_ms: int) -> str:
         <details class="transcript"><summary>transcript</summary><pre>${{transcript}}</pre></details>
       </article>`;
     }}
+    // Snapshot per-card UI state (open transcript + scroll) keyed by the STABLE
+    // manager id (data-key), so the live re-render below never snaps an opened
+    // <details> shut or jumps the scroll position the user is reading.
+    function captureUi(grid) {{
+      const ui = {{}};
+      grid.querySelectorAll(".card").forEach((el) => {{
+        const key = el.getAttribute("data-key");
+        if (!key) return;
+        const det = el.querySelector("details.transcript");
+        const pre = el.querySelector("details.transcript pre");
+        ui[key] = {{ open: det ? det.open : false, scroll: pre ? pre.scrollTop : 0 }};
+      }});
+      return ui;
+    }}
+    function restoreUi(grid, ui) {{
+      grid.querySelectorAll(".card").forEach((el) => {{
+        const key = el.getAttribute("data-key");
+        const saved = key ? ui[key] : null;
+        if (!saved) return;
+        const det = el.querySelector("details.transcript");
+        if (det) det.open = saved.open;
+        const pre = el.querySelector("details.transcript pre");
+        if (pre) pre.scrollTop = saved.scroll;
+      }});
+    }}
     async function refresh() {{
       try {{
         const r = await fetch("api/fleet", {{cache: "no-store"}});
         if (!r.ok) return;
         const data = await r.json();
         const grid = document.getElementById("grid");
+        const ui = captureUi(grid);
         grid.innerHTML = data.managers.length
           ? data.managers.map(card).join("") : '<p class="empty">No managers running.</p>';
+        restoreUi(grid, ui);
         const when = data.updated_at ? new Date(data.updated_at * 1000).toLocaleTimeString() : "never";
         document.getElementById("meta").textContent =
           `${{data.count}} manager(s) · updated ${{when}}`;

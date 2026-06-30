@@ -23,7 +23,7 @@ from reachy_fleet_supervisor.fleet import (
     ManagerSnapshot,
 )
 from reachy_fleet_supervisor.fleet import state as state_mod
-from reachy_fleet_supervisor.fleet.state import _merge_tail
+from reachy_fleet_supervisor.fleet.state import _merge_tail, strip_ansi, sanitize_lines
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +152,69 @@ def test_merge_tail_empty_incoming_keeps_existing() -> None:
 def test_merge_tail_caps_at_maxlen() -> None:
     merged = _merge_tail(["a", "b", "c"], ["d", "e"], maxlen=3)
     assert merged == ("c", "d", "e")
+
+
+# ---------------------------------------------------------------------------
+# Transcript sanitization — strip raw ANSI/VT escapes from `claude logs` TUI
+# ---------------------------------------------------------------------------
+
+# A realistic raw line as `claude logs` emits it: an SGR colour run, real text,
+# a reset, a cursor move and an erase-line — all the noise from the bug report.
+_RAW_LINE = "\x1b[38;2;255;107;128mtester\x1b[m building the repo\x1b[200C\x1b[K"
+
+
+def test_strip_ansi_removes_sgr_cursor_and_erase() -> None:
+    cleaned = strip_ansi(_RAW_LINE)
+    assert cleaned == "tester building the repo"
+    # None of the literal escape garbage survives.
+    for noise in ("\x1b", "[38;2;", "[m", "[200C", "[K"):
+        assert noise not in cleaned
+
+
+def test_strip_ansi_removes_private_modes_and_lone_esc() -> None:
+    # Private mode toggles (?25h/?25l), absolute cursor pos, and a stray ESC.
+    assert strip_ansi("\x1b[?25hhi\x1b[48;3Hthere\x1b[?25l\x1b") == "hithere"
+
+
+def test_strip_ansi_pure_escape_line_collapses_to_empty() -> None:
+    assert strip_ansi("\x1b[K") == ""
+    assert strip_ansi("\x1b[38;2;153;153;153m\x1b[m") == ""
+
+
+def test_sanitize_lines_cleans_and_drops_empty() -> None:
+    raw = [
+        "\x1b[38;2;255;107;128mtester\x1b[m up",
+        "\x1b[K",                       # pure erase-line → dropped
+        "\x1b[38;2;153;153;153m\x1b[m",  # pure colour codes → dropped
+        "  ",                           # whitespace-only → dropped
+        "plain text",
+    ]
+    assert sanitize_lines(raw) == ("tester up", "plain text")
+
+
+def test_sanitize_lines_leaves_clean_text_untouched() -> None:
+    assert sanitize_lines(["alpha", "bravo"]) == ("alpha", "bravo")
+
+
+def test_apply_sanitizes_transcript_at_ingestion() -> None:
+    """Raw `claude logs` escapes are stripped before they reach the ring buffer.
+
+    This is the one chokepoint, so dashboard / CLI / body headline all see clean
+    text. All-escape lines (pure `[K`) are dropped, not stored as blanks.
+    """
+    fs = FleetState()
+    snap = fs.apply(
+        [_bg("aaaa1111", "alpha")],
+        logs={"aaaa1111": [_RAW_LINE, "\x1b[K", "second \x1b[32mline\x1b[m"]},
+        now=1.0,
+    )
+    m = snap.get("alpha")
+    assert m.transcript == ("tester building the repo", "second line")
+    # Nothing escape-y leaked into the stored transcript or the derived headline.
+    joined = "\n".join(m.transcript)
+    assert "\x1b" not in joined and "[K" not in joined and "[38;2;" not in joined
+    assert m.last_line == "second line"
+    assert "\x1b" not in (m.headline or "")
 
 
 # ---------------------------------------------------------------------------

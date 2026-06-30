@@ -205,6 +205,59 @@ def test_healthz() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Sanitized transcript (BUG 1) — raw ANSI/VT escapes never reach the renderer
+# ---------------------------------------------------------------------------
+
+
+def test_transcript_is_sanitized_in_card_and_json() -> None:
+    """Raw `claude logs` escapes are stripped (at ingestion) so neither the
+    server-rendered card nor the JSON poll payload carry terminal garbage."""
+    raw = "\x1b[38;2;255;107;128mtester\x1b[m building\x1b[200C\x1b[K"
+    state = _state_with(
+        _agent("aaa111", "alice"),
+        logs={"aaa111": [raw, "\x1b[K", "second \x1b[32mline\x1b[m"]},
+    )
+    cards = render_cards(state.snapshot)
+    payload = snapshot_payload(state.snapshot)
+    transcript = payload["managers"][0]["transcript"]
+    # Pure-escape line dropped; surviving lines are clean.
+    assert transcript == ["tester building", "second line"]
+    for noise in ("\x1b", "[38;2;", "[200C", "[K", "[m"):
+        assert noise not in cards
+        assert noise not in payload["managers"][0]["last_line"]
+
+
+# ---------------------------------------------------------------------------
+# Disclosure persistence (BUG 2) — live re-render preserves <details> state
+# ---------------------------------------------------------------------------
+
+
+def test_live_render_preserves_disclosure_state() -> None:
+    """The served page's poll JS captures/restores per-card UI state across a
+    re-render (keyed by the stable data-key) so an opened transcript and its
+    scroll survive a poll. JS behaviour itself is a browser concern (human gate);
+    here we structurally verify the mechanism is present and wired by stable id.
+
+    NOTE: residual — only a real browser confirms the open <details> truly stays
+    open across a live poll; this asserts the code that makes it so is served.
+    """
+    page = render_page(_state_with(_agent("aaa111", "alice")).snapshot,
+                        title="T", poll_ms=2000)
+    # Capture + restore helpers exist and are invoked inside refresh().
+    assert "function captureUi(" in page
+    assert "function restoreUi(" in page
+    assert "const ui = captureUi(grid);" in page
+    assert "restoreUi(grid, ui);" in page
+    # State is keyed by the stable manager id and covers open + scroll.
+    assert 'getAttribute("data-key")' in page
+    assert "details.transcript" in page
+    assert ".open" in page
+    assert "scrollTop" in page
+    # restore happens AFTER the innerHTML rebuild (not before / not missing).
+    assert page.index("grid.innerHTML") < page.index("restoreUi(grid, ui);")
+
+
+# ---------------------------------------------------------------------------
 # on_request refresh hook
 # ---------------------------------------------------------------------------
 

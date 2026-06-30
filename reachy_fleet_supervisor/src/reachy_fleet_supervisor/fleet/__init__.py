@@ -64,6 +64,8 @@ from .state import (
     FleetPoller,
     FleetSnapshot,
     ManagerSnapshot,
+    strip_ansi,
+    sanitize_lines,
     tail_logs,
 )
 from .config import (
@@ -172,6 +174,8 @@ __all__ = [
     "FleetPoller",
     "Subscriber",
     "tail_logs",
+    "strip_ansi",
+    "sanitize_lines",
     "ATTENTION_STATES",
     "DEFAULT_LOG_LINES",
     "DEFAULT_POLL_INTERVAL",
