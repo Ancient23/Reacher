@@ -17,7 +17,7 @@ meta:
 status:
   current_phase: 3
   next_unit: U14
-  in_progress: ""
+  in_progress: "U14"
   failure_count: 0
   units_done: 13
   units_total: 26
