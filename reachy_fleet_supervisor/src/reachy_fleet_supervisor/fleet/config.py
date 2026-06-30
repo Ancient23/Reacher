@@ -44,6 +44,11 @@ from .manager import (
     DEFAULT_PERMISSION_MODE,
     RunMode,
 )
+from .status import (
+    SENTINEL_FAILED,
+    SENTINEL_HUMAN_GATE,
+    ManagerStatus,
+)
 
 
 # ``RunMode`` (per-manager hosting: ``background`` | ``remote-control``, decision
@@ -54,6 +59,16 @@ from .manager import (
 # Gate policy mode (decision #13): autonomous by default; ``gated`` means every
 # gate trigger pauses for the human, not just the ones in ``escalate_on``.
 GateMode = Literal["autonomous", "gated"]
+
+# Classification of a gate signal (decision #13): the loop either keeps running
+# without a human (``autonomous``) or pauses for one (``escalate`` — U15 speaks it).
+GateDecision = Literal["autonomous", "escalate"]
+GATE_AUTONOMOUS: GateDecision = "autonomous"
+GATE_ESCALATE: GateDecision = "escalate"
+
+# Key under ``ManagerStatus.extra`` a manager may set to label *why* it gated
+# (e.g. ``"push"``, ``"publish"``, ``"hardware"``) so the policy can classify it.
+GATE_TRIGGER_KEY = "gate_trigger"
 
 
 class FleetConfigError(ValueError):
@@ -91,6 +106,25 @@ class GatePolicy(_StrictModel):
                 seen.add(item)
                 result.append(item)
         return result
+
+    def escalates(self, trigger: str | None) -> bool:
+        """Whether a gateable action labelled *trigger* must escalate to a human.
+
+        Decision #13 classification: in ``gated`` mode every non-empty trigger
+        escalates; in ``autonomous`` mode only triggers listed in ``escalate_on``
+        do (matched case-insensitively). An empty/``None`` trigger is *not* a
+        gateable action and never escalates on its own.
+        """
+        norm = (trigger or "").strip().lower()
+        if not norm:
+            return False
+        if self.mode == "gated":
+            return True
+        return norm in {item.lower() for item in self.escalate_on}
+
+    def classify(self, trigger: str | None) -> GateDecision:
+        """Classify a gate *trigger* as :data:`GATE_ESCALATE` or :data:`GATE_AUTONOMOUS`."""
+        return GATE_ESCALATE if self.escalates(trigger) else GATE_AUTONOMOUS
 
 
 class McpServerConfig(_StrictModel):
@@ -243,10 +277,36 @@ class FleetConfig(_StrictModel):
         available = sorted(p.name for p in self.projects)
         raise KeyError(f"no project named {name!r}; available: {available}")
 
-    def gate_policy_for(self, name: str) -> GatePolicy:
-        """Effective gate policy for a project: its override or the fleet default."""
-        override = self.project(name).defaults.gate_policy
-        return override if override is not None else self.default_gate_policy
+    def gate_policy_for(
+        self, name: str, *, override: GatePolicy | None = None
+    ) -> GatePolicy:
+        """Effective gate policy for a project.
+
+        Precedence (highest first), mirroring ``run_mode``/``permission_mode``:
+        an explicit per-worker *override* (set by voice / the spawn call site),
+        then the project's ``defaults.gate_policy``, then the fleet
+        ``default_gate_policy``.
+        """
+        if override is not None:
+            return override
+        project_override = self.project(name).defaults.gate_policy
+        return project_override if project_override is not None else self.default_gate_policy
+
+    def classify_for(
+        self, name: str, trigger: str | None, *, override: GatePolicy | None = None
+    ) -> GateDecision:
+        """Classify a gate *trigger* under project *name*'s effective policy."""
+        return self.gate_policy_for(name, override=override).classify(trigger)
+
+    def classify_status_for(
+        self,
+        name: str,
+        status: ManagerStatus,
+        *,
+        override: GatePolicy | None = None,
+    ) -> GateDecision:
+        """Classify a manager's emitted *status* under project *name*'s policy."""
+        return classify_status(self.gate_policy_for(name, override=override), status)
 
     def permission_mode_for(self, name: str) -> str:
         """Effective ``--permission-mode`` for a project: override or fleet default."""
@@ -260,6 +320,48 @@ class FleetConfig(_StrictModel):
         """
         override = self.project(name).defaults.run_mode
         return override if override is not None else self.run_mode
+
+
+def gate_trigger_of(status: ManagerStatus) -> str | None:
+    """Extract the gate *trigger* label a manager recorded, if any.
+
+    Looks under ``status.extra[GATE_TRIGGER_KEY]`` — the optional keyword a drive
+    loop sets to say *why* it raised a gate (e.g. ``"push"``). Returns a trimmed
+    string or ``None`` when absent/blank.
+    """
+    raw = status.extra.get(GATE_TRIGGER_KEY)
+    if not isinstance(raw, str):
+        return None
+    cleaned = raw.strip()
+    return cleaned or None
+
+
+def classify_status(policy: GatePolicy, status: ManagerStatus) -> GateDecision:
+    """Classify a manager's emitted *status* against a gate *policy* (decision #13).
+
+    This plugs the real gate signal (the sentinel a manager emits to its
+    ``status.json`` / prints to its transcript — :class:`ManagerStatus`) into the
+    policy:
+
+    - ``FAILED`` always escalates — a hard failure is not auto-approvable.
+    - ``HUMAN_GATE`` is the gate decision point: if the manager labelled it with a
+      trigger (``extra["gate_trigger"]``), the policy decides escalate vs continue;
+      a *bare* gate (no label) always escalates, since the manager explicitly asked
+      for a human. ``gated`` mode escalates every gate regardless.
+    - Any other state (``RUNNING``/``CONTINUE``/``COMPLETE``) is autonomous — there
+      is nothing to gate.
+    """
+    state = status.normalized_state
+    if state == SENTINEL_FAILED:
+        return GATE_ESCALATE
+    if state == SENTINEL_HUMAN_GATE:
+        trigger = gate_trigger_of(status)
+        if trigger is None:
+            # A bare gate (no label to match against ``escalate_on``) is the worker
+            # explicitly asking for a human — escalate regardless of mode.
+            return GATE_ESCALATE
+        return policy.classify(trigger)
+    return GATE_AUTONOMOUS
 
 
 def load_fleet_config(path: str | Path) -> FleetConfig:

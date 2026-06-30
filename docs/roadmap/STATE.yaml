@@ -16,10 +16,10 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 3
-  next_unit: U14
-  in_progress: "U14"
+  next_unit: U15
+  in_progress: ""
   failure_count: 0
-  units_done: 13
+  units_done: 14
   units_total: 26
   # Phase 2 COMPLETE (U1-U10). U11 (Phase 3 run_mode knob) DONE — software complete +
   # green; the optional RC LIVE-CONNECT check (claude.ai-OAuth steering) was SKIPPED by
@@ -45,8 +45,18 @@ status:
   # trivial sample repo to a HUMAN_GATE that flowed into FleetState (test passed in ~24s,
   # session torn down). Fleet suite 273 green; 0 stray bg agents.
   #
-  # Now on U14 (Phase 3) — gate policy (config default + per-worker override; decision #13;
-  # deps U1, U13 both done).
+  # U14 (Phase 3) DONE — gate policy (config default + per-worker override; decision #13).
+  # fleet/config.py: GatePolicy.escalates/classify(trigger) (autonomous mode escalates only
+  # escalate_on triggers, case-insensitive; gated mode escalates every non-empty trigger;
+  # blank trigger = no gate) + module-level classify_status(policy, status) that plugs the
+  # REAL gate signal (ManagerStatus sentinel) into the policy: FAILED always escalates,
+  # HUMAN_GATE labelled via extra["gate_trigger"] follows the policy (bare gate always
+  # escalates), other states autonomous. gate_trigger_of(status) reads the label. Precedence
+  # mirrors run_mode/permission_mode: gate_policy_for(name, override=) = explicit per-worker >
+  # project override > fleet default; classify_for / classify_status_for resolve+classify.
+  # 10 new tests; fleet suite 283 green; 0 stray bg agents.
+  #
+  # Now on U15 (Phase 3) — gate -> voice escalation (decision #17; HARDWARE; deps U13, U14 done).
   pending_gate: ""
 
 units:
@@ -148,7 +158,7 @@ units:
     phase: 3
     title: Gate policy (config default + per-worker override)  # decision #13
     gate: software
-    status: pending
+    status: done
     deps: [U1, U13]
     acceptance: "Default gate policy in fleet config, overridable per worker/project; classification (autonomous vs escalate). Tested."
   - id: U15

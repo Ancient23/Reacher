@@ -10,10 +10,18 @@ from reachy_fleet_supervisor.fleet import (
     GatePolicy,
     FleetConfig,
     ProjectConfig,
+    ManagerStatus,
+    GATE_ESCALATE,
     McpServerConfig,
+    GATE_AUTONOMOUS,
     FleetConfigError,
+    classify_status,
+    gate_trigger_of,
     load_fleet_config,
     parse_fleet_config,
+    SENTINEL_FAILED,
+    SENTINEL_HUMAN_GATE,
+    SENTINEL_COMPLETE,
 )
 
 
@@ -366,3 +374,105 @@ def test_shipped_example_config_is_valid() -> None:
     assert {p.name for p in cfg.projects} == {"reacher", "unreal"}
     assert cfg.gate_policy_for("unreal").mode == "gated"
     assert cfg.gate_policy_for("reacher").mode == "autonomous"
+
+# ---------------------------------------------------------------------------
+# Gate classification (U14, decision #13): autonomous vs escalate
+# ---------------------------------------------------------------------------
+
+
+def test_autonomous_policy_only_escalates_listed_triggers() -> None:
+    """In autonomous mode only triggers in escalate_on escalate; others run on."""
+    gp = GatePolicy(mode="autonomous", escalate_on=["push", "publish"])
+    assert gp.classify("push") == GATE_ESCALATE
+    assert gp.classify("PUBLISH") == GATE_ESCALATE  # case-insensitive
+    assert gp.classify("edit") == GATE_AUTONOMOUS
+    assert gp.escalates("push") is True
+    assert gp.escalates("edit") is False
+
+
+def test_gated_policy_escalates_every_trigger() -> None:
+    """In gated mode every non-empty trigger escalates regardless of the list."""
+    gp = GatePolicy(mode="gated")
+    assert gp.classify("edit") == GATE_ESCALATE
+    assert gp.classify("anything") == GATE_ESCALATE
+
+
+def test_empty_trigger_never_escalates_on_its_own() -> None:
+    """A blank/None trigger is not a gateable action."""
+    assert GatePolicy(mode="gated").classify(None) == GATE_AUTONOMOUS
+    assert GatePolicy(mode="gated").classify("   ") == GATE_AUTONOMOUS
+    assert GatePolicy(mode="autonomous").escalates("") is False
+
+
+def test_gate_trigger_of_reads_extra_label() -> None:
+    """gate_trigger_of pulls the labelled trigger off the status, else None."""
+    labelled = ManagerStatus(state=SENTINEL_HUMAN_GATE, extra={"gate_trigger": " push "})
+    assert gate_trigger_of(labelled) == "push"
+    assert gate_trigger_of(ManagerStatus(state=SENTINEL_HUMAN_GATE)) is None
+    assert gate_trigger_of(ManagerStatus(state=SENTINEL_HUMAN_GATE, extra={"gate_trigger": ""})) is None
+
+
+def test_classify_status_non_attention_is_autonomous() -> None:
+    """RUNNING/CONTINUE/COMPLETE have nothing to gate."""
+    gp = GatePolicy(mode="gated")  # strictest mode still autonomous here
+    assert classify_status(gp, ManagerStatus(state="RUNNING")) == GATE_AUTONOMOUS
+    assert classify_status(gp, ManagerStatus(state=SENTINEL_COMPLETE)) == GATE_AUTONOMOUS
+
+
+def test_classify_status_failed_always_escalates() -> None:
+    """A hard failure is never auto-approvable, even in autonomous mode."""
+    gp = GatePolicy(mode="autonomous", escalate_on=[])
+    assert classify_status(gp, ManagerStatus(state=SENTINEL_FAILED)) == GATE_ESCALATE
+
+
+def test_classify_status_bare_human_gate_escalates() -> None:
+    """An unlabelled HUMAN_GATE asks for a human regardless of mode."""
+    gp = GatePolicy(mode="autonomous", escalate_on=[])
+    assert classify_status(gp, ManagerStatus(state=SENTINEL_HUMAN_GATE)) == GATE_ESCALATE
+
+
+def test_classify_status_labelled_gate_follows_policy() -> None:
+    """A labelled HUMAN_GATE is classified by the trigger against the policy."""
+    auto = GatePolicy(mode="autonomous", escalate_on=["push"])
+    push_gate = ManagerStatus(state=SENTINEL_HUMAN_GATE, extra={"gate_trigger": "push"})
+    docs_gate = ManagerStatus(state=SENTINEL_HUMAN_GATE, extra={"gate_trigger": "docs"})
+    assert classify_status(auto, push_gate) == GATE_ESCALATE
+    assert classify_status(auto, docs_gate) == GATE_AUTONOMOUS
+    # gated mode escalates the docs gate too.
+    assert classify_status(GatePolicy(mode="gated"), docs_gate) == GATE_ESCALATE
+
+
+def test_gate_policy_for_explicit_override_wins() -> None:
+    """Explicit per-worker override beats project override beats fleet default."""
+    cfg = parse_fleet_config(
+        {
+            "default_gate_policy": {"mode": "autonomous"},
+            "projects": [
+                {"name": "a", "path": "/x", "defaults": {"gate_policy": {"mode": "gated"}}},
+            ],
+        }
+    )
+    explicit = GatePolicy(mode="autonomous", escalate_on=["push"])
+    assert cfg.gate_policy_for("a").mode == "gated"  # project override
+    assert cfg.gate_policy_for("a", override=explicit).escalate_on == ["push"]  # explicit wins
+
+
+def test_classify_for_uses_effective_policy() -> None:
+    """classify_for / classify_status_for resolve the project's effective policy."""
+    cfg = parse_fleet_config(
+        {
+            "default_gate_policy": {"mode": "autonomous", "escalate_on": ["push"]},
+            "projects": [
+                {"name": "gated_proj", "path": "/x", "defaults": {"gate_policy": {"mode": "gated"}}},
+                {"name": "auto_proj", "path": "/y"},
+            ],
+        }
+    )
+    # autonomous project: only "push" escalates.
+    assert cfg.classify_for("auto_proj", "push") == GATE_ESCALATE
+    assert cfg.classify_for("auto_proj", "edit") == GATE_AUTONOMOUS
+    # gated project: everything escalates.
+    assert cfg.classify_for("gated_proj", "edit") == GATE_ESCALATE
+    # status-level helper.
+    push_gate = ManagerStatus(state=SENTINEL_HUMAN_GATE, extra={"gate_trigger": "push"})
+    assert cfg.classify_status_for("auto_proj", push_gate) == GATE_ESCALATE
