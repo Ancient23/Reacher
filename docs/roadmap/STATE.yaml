@@ -16,83 +16,24 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 3
-  next_unit: U11
-  in_progress: U11
+  next_unit: U12
+  in_progress: U12
   failure_count: 0
-  units_done: 10
+  units_done: 11
   units_total: 26
-  # Phase 2 COMPLETE. U10 (integration capstone) CONFIRMED PASS on the LIVE ROBOT
-  # (2026-06-29): voice-spawned managers no longer deadlock on permissions, transcript
-  # text is clean/legible, the transcript disclosure stays open across polls, and the
-  # body + dashboard AGREE. U1-U10 are all done. Full U10 history is in JOURNAL.md.
+  # Phase 2 COMPLETE (U1-U10). U11 (Phase 3 run_mode knob) DONE — software complete +
+  # green; the optional RC LIVE-CONNECT check (claude.ai-OAuth steering) was SKIPPED by
+  # explicit human choice (2026-06-30): the RC software path is complete and tested, the
+  # live steering test is deferred, not required. Full U11 history is in JOURNAL.md.
   #
-  # Now on U11 (Phase 3) — per-manager run_mode knob: background | remote-control
-  # (decision #19). The background path is the existing, proven backbone (`claude --bg`,
-  # roster-visible, the whole of Phase 2). The remote-control path is a claude.ai/mobile
-  # STEERABLE session; per CLAUDE.md / decision #16 it does NOT compose with `--bg` and
-  # needs full claude.ai OAuth, so it is a SEPARATE must-stay-alive process and is NOT
-  # roster-visible the way a `--bg` manager is. Both RC command forms were verified vs
-  # `claude --help` / `claude remote-control --help` on Claude Code 2.1.196 (NOT invented):
-  #   - interactive per-manager:  `claude --remote-control <name> [--session-id ...]
-  #       [--permission-mode ...] [--model ...] [--mcp-config ...] <task>`
-  #   - server host (N sessions): `claude remote-control --spawn {same-dir|worktree|session}
-  #       --capacity <N> [--name ...] [--permission-mode ...]`  (takes NO task)
-  # Software wiring + command assembly are autonomous and tested; the RC LIVE-CONNECT
-  # (actually steering a session from claude.ai/mobile) needs OAuth + a live session and
-  # the running robot, so it CANNOT be self-verified -> HUMAN_GATE (see pending_gate).
-  pending_gate: |
-    U11 — Phase 3 run_mode knob. SOFTWARE IS COMPLETE + GREEN (tests/fleet 225 passed):
-    the BACKGROUND path is fully wired + tested (it is the proven Phase-2 backbone), and
-    the REMOTE-CONTROL spawn path is implemented + software-tested. The ONLY thing that
-    genuinely cannot be self-verified is the RC LIVE-CONNECT — it needs full claude.ai
-    OAuth (NOT the Max coding token the fleet otherwise uses) plus a live steering session.
-
-    WHAT LANDED (software, autonomous):
-      - `run_mode` knob (background | remote-control, default background) on FleetManager /
-        SessionManager / the fleet config ([fleet].run_mode + per-project defaults.run_mode,
-        resolved by run_mode_for; FLEET_RUN_MODE env + resolve_run_mode) / `fleet spawn
-        --run-mode` / the `spawn_manager` voice tool (optional run_mode arg).
-      - RC command assembly verified against Claude Code 2.1.196 `--help` (NOT invented):
-          interactive:  claude --remote-control <name> [--session-id] [--permission-mode]
-                        [--model] [--mcp-config] <task>      (build_spawn_argv)
-          server host:  claude remote-control --spawn {same-dir|worktree|session}
-                        --capacity <N> [--name] [--permission-mode]
-                                                              (build_remote_control_server_argv)
-        RC does NOT compose with --bg (decision #16): it is launched as a separate, detached,
-        must-stay-alive interactive process, is NOT roster-visible (no `agents --json` row, no
-        `claude stop`), and its teardown terminates that process.
-
-    WHY GATED: there is no roster row / `claude agents --json` signal to assert RC against in
-    software (that is exactly why RC doesn't compose with --bg). Everything up to "the process
-    launches with the right argv" is tested; "claude.ai/mobile actually connects and can steer
-    it" is the human bit.
-
-    DO THIS (optional RC live-connect check — only if you want to exercise remote-control):
-      1. Sign in to claude.ai in Claude Code with FULL OAuth (separate from the Max coding
-         token; run `claude auth` / sign in if unsure). RC will not connect on a coding-only token.
-      2. From a real repo, start an interactive remote-control session (what run_mode=
-         remote-control assembles under the hood):
-             claude --remote-control fleet-rc-test "say hello, then wait"
-         (or exercise server mode — one host for N steerable sessions:
-             claude remote-control --spawn worktree --capacity 2 --name fleet-rc-host )
-      3. Open claude.ai/code (or the Claude mobile app) and confirm the session
-         "fleet-rc-test" (or the "fleet-rc-host" sessions) appears and you can STEER it
-         (send it a message from web/phone, see it respond locally).
-      4. Ctrl-C the session when done (it is interactive/foreground — no `claude stop` for it).
-
-    REPORT BACK:
-      - PASS if an RC session showed up in claude.ai/code (or mobile) and you could steer it.
-        That confirms run_mode=remote-control end to end → I'll mark U11 done.
-      - PROBLEM (describe it) otherwise:
-          * "RC won't connect / asks me to log in" → you're on the coding-only token, not full
-            claude.ai OAuth (decision #16); `claude auth` sign-in and retry.
-          * "flag not recognized" → Claude Code version drift; re-check `claude --help` /
-            `claude remote-control --help` and tell me the new flag shape (argv is assembled
-            from those exact flags in fleet/manager.py).
-      - SKIP is fine: the software (run_mode knob + background fully wired + RC command
-        assembly) is complete and green; the live RC check is optional Phase-3 polish. Say
-        "skip RC" and I'll mark U11 done as software-complete and move to U12 (interactive
-        controls).
+  # Now on U12 (Phase 3) — interactive controls (CLI + dashboard): approve gate / send
+  # message / pause-resume / spawn-kill / reassign over the fleet. Decision #16 open item:
+  # verify + document the NON-INTERACTIVE steering path for background managers
+  # (`claude --resume <id> -p <msg>` vs agent-view). Background managers run
+  # bypassPermissions (U10) so "approve a gate" for them = sending the steering message
+  # that unblocks/redirects; remote-control managers (U11) are steered from claude.ai and
+  # are NOT roster-visible, so fleet-side controls target the background backbone.
+  pending_gate: ""
 
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
@@ -172,7 +113,7 @@ units:
     phase: 3
     title: run_mode knob (background | remote-control)  # decision #19
     gate: software
-    status: in_progress
+    status: done
     deps: [U3]
     acceptance: "Manager model gains run_mode; background path fully wired+tested. remote-control spawn path implemented (claude --remote-control / server mode); RC live-connect verification = HUMAN_GATE (needs full claude.ai OAuth)."
   - id: U12
