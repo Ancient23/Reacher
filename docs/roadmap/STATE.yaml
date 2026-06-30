@@ -15,236 +15,32 @@ meta:
 #   hardware  — needs the physical robot (motion / voice / vision); implement then HUMAN_GATE.
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
-  current_phase: 2
-  next_unit: U10
-  in_progress: U10
+  current_phase: 3
+  next_unit: U11
+  in_progress: U11
   failure_count: 0
-  units_done: 9
+  units_done: 10
   units_total: 26
-  # U8 (Body renders FleetState) CONFIRMED PASS by the human on the refreshed demo
-  # ("Pass, all looks good"): body turns toward the flagged manager (two opposite
-  # directions at steps 2 & 3), antennas droop clearly DOWN on failure and HOLD, turn
-  # is acceptably smooth. U8 marked done. Now on U10 — Phase 2 integration capstone.
+  # Phase 2 COMPLETE. U10 (integration capstone) CONFIRMED PASS on the LIVE ROBOT
+  # (2026-06-29): voice-spawned managers no longer deadlock on permissions, transcript
+  # text is clean/legible, the transcript disclosure stays open across polls, and the
+  # body + dashboard AGREE. U1-U10 are all done. Full U10 history is in JOURNAL.md.
   #
-  # U10 HUMAN_GATE: software integration test of the whole fleet core is GREEN
-  # (tests/fleet/test_integration.py — real bg session driven through SessionManager →
-  # FleetState poll → CLI + dashboard + body renderer all render it; cleaned up, 0 stray
-  # agents). README + plan.md Phase-2 status updated. The end-to-end ON-ROBOT run
-  # (talk → spawn → observe on body AND dashboard) cannot be self-verified → gated.
-  #
-  # U10 GATE PROBLEM #1 (2026-06-29) — human ran the live E2E: "robot is working /
-  # interacting with a repo but I see NOTHING in the dashboard at /fleet." ROOT CAUSE =
-  # integration wiring the isolated tests didn't cover, TWO disconnects:
-  #   (a) the RUNNING app (main.run, launched by run.ps1) built the voice/gradio app but
-  #       NEVER mounted the /fleet dashboard nor started a FleetPoller → /fleet 404'd and
-  #       no FleetState was ever refreshed; and
-  #   (b) the only voice coding tool (ask_claude_code) runs an IN-PROCESS WorkerSession
-  #       (claude_brain.py) which is NOT a `claude --bg` agent, so it never appears in
-  #       `claude agents --json` — the exact roster the poller reads. Voice-spawn path and
-  #       fleet-observability path were not wired to each other.
-  # FIX (this iteration): new fleet/runtime.py = process-wide FleetRuntime (shared
-  # FleetState + SessionManager + started FleetPoller) + mount_fleet_dashboard(); main.run
-  # now mounts /fleet onto settings_app and starts the poller (both gradio + headless
-  # branches) and stops it on shutdown; NEW voice tool `spawn_manager` (profile tool +
-  # tools.txt + instructions) routes spawns through runtime.session_manager so a
-  # voice-spawned `claude --bg` manager is roster-visible → poller → FleetState → dashboard
-  # + body. ask_claude_code stays as the quick in-process delegate (intentionally NOT
-  # fleet-visible). New software wiring tests: tests/fleet/test_app_wiring.py (mount serves
-  # /fleet over shared state; get_fleet_runtime is a started singleton; voice spawn_manager
-  # → roster → FleetState → dashboard end-to-end with a fake roster). Fleet suite 181 green;
-  # 0 stray bg agents. RESIDUAL only confirmable on the robot: the real browser at
-  # http://127.0.0.1:7860/fleet showing the live card + body agreeing → re-emitted gate.
-  #
-  # U10 GATE PROBLEM #2 (2026-06-29) — human ran the live dashboard: the
-  # manager CARDS rendered correctly (names, stable colors, BLOCKED/WORKING
-  # state badges, live "updated" timestamp) but TWO RENDERING bugs:
-  #   BUG 1 GARBLED TEXT — card last-line + transcript showed RAW VT/ANSI control
-  #     sequences literally ([38;2;255;107;128m, [K, [200C, [48;3H, [?25h, [m;
-  #     □ glyphs = ESC 0x1b). ROOT CAUSE: `claude logs <id>` returns raw TUI
-  #     output (SGR colours + cursor/erase/private-mode control seqs); we
-  #     stored/rendered it verbatim. FIX: shared sanitizer in fleet/state.py
-  #     (strip_ansi + sanitize_lines: strip CSI/OSC/two-char escapes + stray C0
-  #     bytes, DROP lines empty after stripping like pure `[K`), applied at
-  #     INGESTION in FleetState.apply() — the single chokepoint feeding the
-  #     transcript ring buffer — so dashboard + CLI + body headline ALL get clean
-  #     text. BUG 2 DISCLOSURE AUTO-CLOSES — transcript is in <details>; the live
-  #     poll rebuilt grid.innerHTML each poll_ms, resetting <details open>→closed
-  #     + scroll, so an opened transcript snapped shut on the next ~2s poll. FIX:
-  #     served JS now captureUi(grid) (per-card open + pre.scrollTop, keyed by
-  #     stable data-key) BEFORE the innerHTML rebuild and restoreUi(grid,ui)
-  #     AFTER. Tests: +6 in test_state.py (sanitizer + apply-at-ingestion), +2 in
-  #     test_dashboard.py (sanitized card/JSON; served JS has the capture/restore
-  #     mechanism keyed by data-key — JS runtime is the human's visual gate).
-  #     Fleet suite 189 green; 0 stray bg agents. NOTE: raw `claude logs` TUI
-  #     content is inherently noisy; the cleaner long-term signal is each
-  #     manager's emitted status.json (U5) — sanitizing is the right fix for now.
-  #     RESIDUAL only the human can confirm: the app must be RESTARTED to load the
-  #     new dashboard code, then visually confirm clean text + a transcript that
-  #     stays open across polls → gate RE-EMITTED below.
-  #
-  # Idle-breathing decision (carried from U8 note): in LIVE operation the body renderer
-  # only commands a pose on change, so idle BreathingMove reverts a signalled pose to
-  # neutral ~1s later. Decision: ACCEPT the momentary glance for fleet signalling (do
-  # NOT permanently suppress breathing — a frozen, non-breathing robot reads as "dead"
-  # and breathing is core to the Pollen persona). Instead, on a state CHANGE that needs
-  # attention the renderer re-asserts the pose briefly (a short hold), then lets
-  # breathing resume; the dashboard is the always-on truth, the body is a glanceable
-  # nudge. This is a per-update concern, NOT continuous suppression. See plan.md §6 #21
-  # follow-up + body.py FleetBodyRenderer(hold_seconds=...). Covered in the integration
-  # test at the software level (renderer re-asserts on attention changes via the applier
-  # hold hook); the felt "glance vs hold" timing is part of the on-robot HUMAN_GATE.
-  #
-  # U10 GATE PROBLEM #3 (2026-06-29) — human ran the live fleet: spawned managers
-  # DEADLOCK. A `claude --bg` manager showed state BLOCKED / waitingFor
-  # "permission prompt"; its raw transcript showed Claude Code's interactive
-  # permission UI ("bypass permissions on (shift+tab to cycle)"). ROOT CAUSE: a
-  # background agent has NO TTY, so the first tool call needing approval blocks it
-  # forever, and there is no way to clear it (dashboard is read-only U7; approve/
-  # steer controls are U12, not built). The manager/session_manager/CLI layers
-  # already defaulted to `--permission-mode bypassPermissions`, but the VOICE path
-  # (spawn_manager) did not pass/resolve it explicitly or configurably, and the
-  # value/behavior had never been verified end-to-end.
-  # FIX (this iteration, U10 stays in_progress):
-  #   - manager.py: VALID_PERMISSION_MODES (verified vs claude 2.1.196: acceptEdits,
-  #     auto, bypassPermissions, default, dontAsk, plan) + validate_permission_mode
-  #     + resolve_permission_mode(override > $FLEET_PERMISSION_MODE > DEFAULT=
-  #     bypassPermissions); build_spawn_argv now validates the mode.
-  #   - config.py: fleet-wide default `[fleet].permission_mode` (= bypassPermissions)
-  #     + per-project `defaults.permission_mode` override + FleetConfig
-  #     .permission_mode_for(project); both validated.
-  #   - spawn_manager voice tool: optional `permission_mode` arg in the schema;
-  #     resolves via resolve_permission_mode and passes it explicitly to
-  #     SessionManager.spawn (rejects an invalid mode, spoken back).
-  #   CHOSEN DEFAULT = bypassPermissions (trusted LOCAL autonomous managers; they
-  #   escalate real blockers as a HUMAN_GATE in FleetState, not via a dead TUI
-  #   prompt). SECURITY: bypassPermissions SKIPS ALL permission checks for that
-  #   session (file/shell/network) — documented in plan.md decision #22; the user
-  #   can switch to a gated mode via config/env/arg (acceptEdits will then block on
-  #   shell prompts until U12 lands). INTEGRATION-VERIFIED REAL: a `claude --bg`
-  #   spawn with bypassPermissions on a task needing a file-write + shell command
-  #   went working→done and NEVER showed waitingFor a permission prompt; managers
-  #   spawned without it were observed BLOCKED/waitingFor "permission prompt"
-  #   (the reported bug). Stray agents cleaned up; 0 background agents remain.
-  #   Tests: +5 in test_manager.py, +6 in test_config.py, +4 in test_app_wiring.py;
-  #   tests/fleet 203 green. RESIDUAL only the human can confirm on the robot:
-  #   restart run.ps1, voice-spawn a manager, and confirm its card PROGRESSES
-  #   (WORKING/done) instead of BLOCKED "waiting: permission prompt" → gate
-  #   RE-EMITTED below (now also verifies the dashboard-display fixes from #2).
-  pending_gate: |
-    U10 — Phase 2 integration capstone: END-TO-END ON-ROBOT run (HARDWARE) — RE-EMITTED
-    after fixing the CRITICAL DEADLOCK you reported (managers spawned by voice got stuck
-    BLOCKED on Claude Code's interactive "bypass permissions on (shift+tab to cycle)"
-    permission prompt that a background agent has no TTY to answer). This round's #1 job
-    is to confirm a voice-spawned manager now PROGRESSES instead of deadlocking. The
-    earlier dashboard-display fixes (clean text + transcript stays open) are re-checked too.
-
-    WHAT CHANGED SINCE YOUR LAST RUN:
-      - DEADLOCK fixed — voice-spawned managers now run NON-INTERACTIVELY. The spawn path
-        passes `--permission-mode bypassPermissions` (validated end-to-end against a real
-        `claude --bg` session: it ran working→done and never waited on a permission
-        prompt). It is configurable (fleet config `[fleet].permission_mode`, per-project
-        `defaults.permission_mode`, the `FLEET_PERMISSION_MODE` env var, or a per-spawn
-        `permission_mode` arg). SECURITY NOTE: bypassPermissions SKIPS ALL permission
-        checks for that manager session (file/shell/network) — it acts unattended in the
-        repo you point it at; that is intended for trusted local managers. To run gated
-        instead, set one of those knobs to e.g. `acceptEdits` (it will then pause on shell
-        prompts until interactive approve/steer controls land in U12). See plan.md #22.
-      - (from last round) Transcript text is SANITIZED (no raw [38;2;…m / [K / □ ESC
-        glyphs), and opening "▼ transcript" STAYS open across the ~2s polls.
-    >> YOU MUST RESTART THE APP to load the new code: Ctrl-C the running run.ps1, then
-       relaunch it. A browser refresh alone is NOT enough — the served HTML/JS and the
-       spawn path are generated by the app process.
-
-    Everything else is unchanged: to see a card you still must ask Reachy to "SPAWN A
-    MANAGER" (spawn_manager → a durable, dashboard-visible `claude --bg` manager). Plain
-    "go fix X in my repo" uses ask_claude_code (in-process, by design NOT on the dashboard).
-
-    DO THIS:
-      1. Power the Reachy Mini ON via the REAR USB-C port (NOT the front/USB-B port —
-         it browns out the motors). Wait for the daemon/motor backend to come up
-         (run.ps1 gates on the motor backend, not just HTTP).
-      2. RESTART the app to load the new code (voice brain + body + dashboard + spawn path).
-         If it's already running, Ctrl-C it first, then from the repo root:
-             pwsh -File reachy_fleet_supervisor/run.ps1
-         Wait until it reports the app is up and the motor backend is ready. (Tip: if
-         the page 404s, check reachy_fleet_supervisor/.logs/app.err.log for a line like
-         "Fleet dashboard mounted at /fleet".)
-      3. Open the web dashboard in a browser (the read-only fleet view):
-             http://127.0.0.1:7860/fleet
-         The page shows a 2-4 card grid and should start EMPTY ("No managers running.").
-         Quick check it's served: http://127.0.0.1:7860/fleet/healthz returns {"ok":true}
-         and http://127.0.0.1:7860/fleet/api/fleet returns JSON with "managers": [].
-      4. By VOICE, explicitly ask Reachy to SPAWN A MANAGER on a real local project, e.g.:
-             "Spawn a manager called tester on C:\\Source\\<some-repo> to run the tests."
-         Give a real path on disk and any trivial real task. Reachy should confirm it
-         spawned a manager. (This calls spawn_manager → a live `claude --bg` session.)
-      5. CONFIRM THE DEADLOCK IS GONE (the headline check this round):
-         (a) The "tester" card must go to WORKING/▢ and actually PROGRESS (transcript
-             lines stream in, state moves toward done) — it must NOT sit BLOCKED with
-             "waiting: permission prompt", and the transcript must NOT show Claude Code's
-             interactive permission UI ("bypass permissions on (shift+tab to cycle)").
-         (b) Cross-check in another terminal (see step 8): `claude agents --json` for
-             "tester" should show state working/idle/done — NOT `"waitingFor":"permission
-             prompt"` / `"state":"blocked"`.
-      6. CONFIRM THE DISPLAY FIXES on the "tester" card (from last round):
-         (a) CLEAN TEXT — headline/last-line and transcript are legible words, NO raw
-             escape codes ([38;2;…m, [K, [200C, [?25h), NO □ ESC glyphs, NO blank/"[K" rows.
-         (b) DISCLOSURE STAYS OPEN — click "▼ transcript" and WAIT through several ~2s
-             refreshes: it must STAY OPEN (and not jump scroll) while new lines stream in.
-      7. WATCH BOTH RENDERERS:
-         ON THE DASHBOARD (refreshes ~2s): the CARD shows name + stable color dot, a
-           state badge (working/attention/done), current tool, and the transcript filling in.
-         ON THE BODY: the TORSO turns toward that manager's slot, ANTENNAS show its state
-           (slightly up = working). When steadily working the body may relax into the
-           breathing idle between changes (by design); the clear HELD signal is on a state
-           CHANGE — let it finish or hit a gate → body should perk (attention) / settle
-           (done), and the dashboard badge should match. Confirm body + dashboard AGREE on
-           WHO needs attention and WHAT state it's in.
-      8. SOFTWARE SANITY CHECK (run in another terminal while the manager is up) — proves
-         the voice spawn really is a roster-visible bg agent the poller can see AND that it
-         is not deadlocked on a prompt:
-             claude agents --json
-         You should see a "kind":"background" entry named "tester" whose "state" is
-         working/idle/done and whose "waitingFor" is NOT "permission prompt".
-      9. Stop everything: Ctrl-C the app; then ensure NO stray agents remain:
-             claude agents --json                  # should NOT list "tester"
-             claude stop <id> && claude rm <id>     # if it lingers
-
-    REPORT BACK:
-      - PASS if: the "tester" card PROGRESSED (WORKING→done) and did NOT deadlock on a
-        permission prompt (no "waiting: permission prompt", no interactive bypass-permissions
-        UI in the transcript); `claude agents --json` showed "tester" as a background agent
-        NOT waitingFor a permission prompt; card text was CLEAN/legible; opening "▼
-        transcript" STAYED open across updates; a CARD appeared (correct name/color/state)
-        AND the body reacted (turned toward it / antennas matched) and the two renderers
-        agreed. The momentary breathing "glance" between changes is acceptable.
-      - PROBLEM (describe what you saw) otherwise, and say WHERE it broke:
-          * Still BLOCKED "waiting: permission prompt" / interactive bypass-permissions UI
-            → app wasn't restarted (most likely — the spawn path change needs a fresh
-            process), or `FLEET_PERMISSION_MODE` is set to a prompting mode in the
-            environment (unset it), or the task itself asked Claude to ask YOU a question
-            (that is an agent-design prompt, not a tool-permission prompt).
-          * Still garbled text → app wasn't restarted, or a new escape class the sanitizer
-            misses (paste an example raw line).
-          * Transcript still snaps shut on poll → app wasn't restarted, or the served JS
-            capture/restore didn't run (check the browser console for captureUi/restoreUi).
-          * Reachy didn't spawn / used the wrong tool → voice→spawn_manager wiring
-            (persona instructions / tool selection).
-          * `claude agents --json` shows the manager but the dashboard card never appears
-            → poller/mount (check the "Fleet dashboard mounted" log + /fleet/api/fleet).
-          * /fleet itself 404s → mount didn't run (settings_app host/port; app.err.log).
-          * Card appears but body didn't react → renderer attach/applier (the body
-            renderer is NOT yet attached to the live runtime — SEE NEXT-ITERATION NOTE).
-          * Body and dashboard disagree → mapping; motor brownout/errors → power/USB.
-
-    NEXT-ITERATION NOTE (known residual, software): main.run mounts the dashboard + poller
-    and the voice spawn is now fleet-visible, but the BODY renderer (FleetBodyRenderer)
-    is not yet attached to the shared FleetRuntime.state in main.run — on the robot the
-    body motion today is driven by openai_realtime's own status, not by FleetState. If the
-    dashboard shows the manager but the body doesn't react to fleet state, that attach is
-    the remaining wire (subscribe a FleetBodyRenderer with a make_goto_applier over the
-    movement_manager to runtime.state). The dashboard half of this gate is the priority
-    fix that was reported; flag the body half if observed.
+  # Now on U11 (Phase 3) — per-manager run_mode knob: background | remote-control
+  # (decision #19). The background path is the existing, proven backbone (`claude --bg`,
+  # roster-visible, the whole of Phase 2). The remote-control path is a claude.ai/mobile
+  # STEERABLE session; per CLAUDE.md / decision #16 it does NOT compose with `--bg` and
+  # needs full claude.ai OAuth, so it is a SEPARATE must-stay-alive process and is NOT
+  # roster-visible the way a `--bg` manager is. Both RC command forms were verified vs
+  # `claude --help` / `claude remote-control --help` on Claude Code 2.1.196 (NOT invented):
+  #   - interactive per-manager:  `claude --remote-control <name> [--session-id ...]
+  #       [--permission-mode ...] [--model ...] [--mcp-config ...] <task>`
+  #   - server host (N sessions): `claude remote-control --spawn {same-dir|worktree|session}
+  #       --capacity <N> [--name ...] [--permission-mode ...]`  (takes NO task)
+  # Software wiring + command assembly are autonomous and tested; the RC LIVE-CONNECT
+  # (actually steering a session from claude.ai/mobile) needs OAuth + a live session and
+  # the running robot, so it CANNOT be self-verified -> HUMAN_GATE (see pending_gate).
+  pending_gate: null
 
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
@@ -315,7 +111,7 @@ units:
     phase: 2
     title: Phase 2 integration + docs
     gate: hardware
-    status: in_progress
+    status: done
     deps: [U5, U6, U7, U8, U9]
     acceptance: "Software integration test of the whole fleet core (autonomous). End-to-end with the robot (talk → spawn → observe on body + dashboard) = HUMAN_GATE. Update README/plan status."
 
