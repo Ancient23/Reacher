@@ -152,6 +152,21 @@ def run(
             logger.info("Fleet dashboard mounted at /fleet (poller running)")
         except Exception:  # noqa: BLE001
             logger.exception("Failed to mount the fleet dashboard at /fleet")
+            return
+
+        # Voice renders FleetState too (U15, decision #17): attach a voice
+        # renderer that SPEAKS fleet state changes (failed / gate "needs you" /
+        # completion) through the Realtime host, complementing the body. Routed to
+        # the handler's thread-safe speak seam (the poller fires from a worker
+        # thread). Best-effort — a voice wiring failure must not break the fleet.
+        try:
+            from reachy_fleet_supervisor.fleet.voice import FleetVoiceRenderer
+
+            voice_renderer = FleetVoiceRenderer(speak=handler.speak_threadsafe)
+            voice_renderer.attach(fleet_runtime.state)
+            logger.info("Fleet voice renderer attached (speaks state changes)")
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to attach the fleet voice renderer")
 
     stream_manager: gr.Blocks | LocalStream | None = None
 

@@ -102,6 +102,12 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         self._shutdown_requested: bool = False
         self._connected_event: asyncio.Event = asyncio.Event()
 
+        # The event loop the realtime session runs on, captured once connected so
+        # the fleet voice renderer (a FleetState subscriber called from the
+        # poller's *background thread*, U15) can schedule a spoken announcement
+        # back onto this loop via :meth:`speak_threadsafe`.
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
         # Background tool manager
         self.tool_manager = BackgroundToolManager()
 
@@ -486,6 +492,12 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
             # Manage event received from the openai server
             self.connection = conn
+            # Capture the running loop so cross-thread callers (the fleet voice
+            # renderer, U15) can schedule spoken announcements onto it.
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._loop = None
             try:
                 self._connected_event.set()
             except Exception:
@@ -866,6 +878,71 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 "tool_choice": "required",
             },
         )
+
+    async def announce_fleet_event(self, text: str) -> None:
+        """Speak a fleet update aloud — the voice renderer of FleetState (U15).
+
+        Injects the update as a user-role message and asks the model to relay it
+        briefly in its own voice, exactly like :meth:`send_idle_signal` injects an
+        idle nudge. This is what makes Reachy *say* "build failed, needs you" /
+        "the tester finished" when the fleet state changes. Best-effort: a closed
+        connection just drops the announcement (the dashboard/body remain the
+        durable truth).
+        """
+        text = (text or "").strip()
+        if not text:
+            return
+        if not self.connection:
+            logger.debug("fleet voice: no connection; dropping announcement %r", text)
+            return
+        try:
+            await self.connection.conversation.item.create(
+                item={
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                f"[Fleet update] {text} "
+                                "Relay this to me out loud, briefly and in your own voice."
+                            ),
+                        },
+                    ],
+                },
+            )
+            await self._safe_response_create(
+                response={
+                    "instructions": (
+                        "Relay the fleet update just provided to the user out loud, "
+                        "briefly and in your own voice."
+                    ),
+                },
+            )
+        except ConnectionClosedError:
+            logger.warning("fleet voice: connection closed while announcing")
+            self.connection = None
+            self._response_done_event.set()
+
+    def speak_threadsafe(self, text: str) -> None:
+        """Thread-safe entry point for the fleet voice renderer's ``speak`` hook.
+
+        The :class:`~reachy_fleet_supervisor.fleet.state.FleetPoller` notifies its
+        subscribers (including the
+        :class:`~reachy_fleet_supervisor.fleet.voice.FleetVoiceRenderer`) from a
+        *background thread*, but the realtime connection lives on the asyncio loop
+        captured in :meth:`_run_realtime_session`. This schedules
+        :meth:`announce_fleet_event` onto that loop. Best-effort: if there is no
+        live session/loop, the announcement is dropped (logged at debug).
+        """
+        loop = self._loop
+        if loop is None or self.connection is None:
+            logger.debug("fleet voice: no live realtime session; dropping %r", text)
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self.announce_fleet_event(text), loop)
+        except Exception:  # noqa: BLE001 — scheduling must never break the poller
+            logger.warning("fleet voice: failed to schedule announcement", exc_info=True)
 
     def _persist_api_key_if_needed(self) -> None:
         """Persist the API key into `.env` inside `instance_path/` when appropriate.

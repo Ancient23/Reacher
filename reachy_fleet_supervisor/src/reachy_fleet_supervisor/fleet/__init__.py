@@ -165,6 +165,17 @@ from .session_manager import (
     AgentPredicate,
     SessionManager,
 )
+from .voice import (
+    VOICE_GATE,
+    VOICE_FAILED,
+    VOICE_COMPLETED,
+    SpeakFn,
+    VoiceKind,
+    VoiceAnnouncement,
+    FleetVoiceRenderer,
+    speakable_kind,
+    voice_phrase_for,
+)
 
 
 __all__ = [
@@ -289,4 +300,14 @@ __all__ = [
     "SIGNAL_ATTENTION",
     "SIGNAL_DONE",
     "SIGNAL_FAILED",
+    # voice renderer (U15)
+    "FleetVoiceRenderer",
+    "VoiceAnnouncement",
+    "speakable_kind",
+    "voice_phrase_for",
+    "VoiceKind",
+    "SpeakFn",
+    "VOICE_FAILED",
+    "VOICE_GATE",
+    "VOICE_COMPLETED",
 ]

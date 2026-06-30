@@ -17,7 +17,7 @@ meta:
 status:
   current_phase: 3
   next_unit: U15
-  in_progress: ""
+  in_progress: "U15"
   failure_count: 0
   units_done: 14
   units_total: 26
@@ -56,8 +56,52 @@ status:
   # project override > fleet default; classify_for / classify_status_for resolve+classify.
   # 10 new tests; fleet suite 283 green; 0 stray bg agents.
   #
-  # Now on U15 (Phase 3) — gate -> voice escalation (decision #17; HARDWARE; deps U13, U14 done).
-  pending_gate: ""
+  # U15 (Phase 3) IN PROGRESS — gate -> voice escalation (decision #17; HARDWARE).
+  # Software COMPLETE + fleet suite 303 green (+20 voice tests). Voice is now a
+  # renderer of FleetState alongside the body: fleet/voice.py FleetVoiceRenderer
+  # (edge-triggered FleetState subscriber) speaks on state CHANGES — task
+  # COMPLETION, build/test FAILED, and HUMAN_GATE "needs you" — reusing U14
+  # GatePolicy/classify_status so an autonomous gate stays silent and an
+  # escalating one speaks (bare gate speaks by default). speakable_kind +
+  # voice_phrase_for are pure/tested. The speak seam is
+  # OpenaiRealtimeHandler.announce_fleet_event (+ speak_threadsafe bridge: the
+  # poller fires from a worker thread, scheduled onto the realtime loop) modeled
+  # on send_idle_signal; wired in main.py (_mount_fleet attaches the voice
+  # renderer to the shared fleet_runtime.state). The RESUME-on-answer path is the
+  # new answer_gate voice tool (profile) -> FleetController.send (claude --resume
+  # -p, U12/decision #16) + persona instructions. HARDWARE gate: audio/voice
+  # needs the physical robot, so the spoken path is human-verified (pending_gate).
+  pending_gate: |
+    U15 gate -> voice escalation: confirm by VOICE on the robot (decision #17).
+    Audio/voice cannot be self-verified; please verify on the physical robot.
+
+    SETUP
+    1. Power the robot on the REAR USB-C port (validated-stable; front/USB-B browns out).
+    2. Launch the app + fleet (from C:/Source/reacher):
+         cd reachy_fleet_supervisor; ./run.ps1
+       Wait until voice is live (you can talk to Reachy) and http://127.0.0.1:7860/fleet loads.
+
+    TEST A — speak on COMPLETION (the human's explicit ask: speak on completion, not just gates)
+    3. By VOICE say: "Spawn a manager named greeter on C:/Source/reacher that creates a file
+       hello.txt containing hi, then stop."  (Reachy calls spawn_manager; watch it on /fleet.)
+    4. LISTEN: when it finishes, Reachy should SPEAK the completion aloud (e.g. "the greeter
+       finished its task") — not merely emote. (Body still signals; voice now says it too.)
+
+    TEST B — speak on a GATE ("needs you") + resume by voice
+    5. By VOICE: "Spawn a manager named builder on C:/Source/reacher that runs a build which
+       fails, reports HUMAN_GATE, and waits."  (Or point it at a trivial repo whose build fails.)
+    6. LISTEN: Reachy should SPEAK the escalation aloud, e.g. "heads up — builder failed and
+       needs you" / "builder needs you: <gate question>".
+    7. ANSWER BY VOICE, e.g.: "Tell builder to skip the failing step and continue."
+       EXPECT: Reachy calls answer_gate and confirms aloud ("answered builder and resumed its
+       work"); on /fleet the builder leaves the gated/failed state and continues (loop resumes).
+
+    CLEANUP
+    8. By VOICE: "Stop and remove the greeter and builder managers"  (or: `claude stop <id>` +
+       `claude rm <id>` for each). Confirm `claude agents --json` shows no stray bg managers.
+
+    PASS if: Reachy SPEAKS task completion AND the failure/gate "needs you", and a spoken answer
+    resumes the gated manager's loop. Report PASS, or describe what was/wasn't spoken.
 
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------

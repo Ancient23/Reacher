@@ -13,3 +13,6 @@ ask_claude_code
 
 # Spawn a durable, watchable background fleet manager (shows on /fleet + body)
 spawn_manager
+
+# Answer a manager's HUMAN_GATE by voice and resume its loop (decision #17)
+answer_gate
