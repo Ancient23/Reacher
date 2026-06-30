@@ -96,7 +96,15 @@ from .status import (
     read_status_for,
     status_path_for,
     default_status_dir,
+    status_from_transcript,
     read_statuses_for_agents,
+)
+from .drive import (
+    DEFAULT_DRIVE_COMMAND,
+    DEFAULT_SENTINEL_PREFIX,
+    DriveLoopSpec,
+    build_drive_task,
+    spawn_drive_manager,
 )
 from .manager import (
     RUN_MODE_ENV,
@@ -223,6 +231,13 @@ __all__ = [
     "status_path_for",
     "default_status_dir",
     "parse_sentinel",
+    "status_from_transcript",
+    # drive loops (U13)
+    "DriveLoopSpec",
+    "build_drive_task",
+    "spawn_drive_manager",
+    "DEFAULT_DRIVE_COMMAND",
+    "DEFAULT_SENTINEL_PREFIX",
     "STATUS_FILENAME",
     "STATUS_DIR_ENV",
     "ATTENTION_SENTINELS",

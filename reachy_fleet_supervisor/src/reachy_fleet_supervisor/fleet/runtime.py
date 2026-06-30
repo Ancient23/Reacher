@@ -109,6 +109,10 @@ def build_fleet_runtime(
         include_all=include_all,
         claude_bin=claude_bin,
         status_dir=str(status_dir) if status_dir is not None else str(default_status_dir()),
+        # U13: a drive-loop manager reports via status.json; fall back to its
+        # transcript sentinel so a HUMAN_GATE flows into FleetState even before
+        # the on-disk report lands. Needs the log tail (fetch_logs).
+        derive_status_from_transcript=fetch_logs,
     )
     return FleetRuntime(state=state, session_manager=session_manager, poller=poller)
 

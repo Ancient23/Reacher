@@ -224,6 +224,16 @@ is just a subscriber to FleetState. Nothing polls the workers directly.
     **ralph/drive loop** (cf. `drive-loop` skill): fresh-context subagent per iteration, sentinel-
     gated, durable committed git state. We delegate orchestration to Claude rather than building a
     scheduler. No separate Claude orchestrator brain — **Realtime stays the host**.
+    *Implemented in **U13** (Phase 3).* `fleet/drive.py`: a `DriveLoopSpec` (name / target repo /
+    `/drive-*` command / sentinel prefix / optional `max_iterations` / status dir) + the pure
+    `build_drive_task` (the `claude --bg` prompt telling the manager to run the loop AND emit its
+    per-iteration report to its `status.json`, escalating `HUMAN_GATE` and stopping) +
+    `spawn_drive_manager` (spawns it through `SessionManager`, `cwd`=repo). The sentinel reaches
+    FleetState two ways: the manager's emitted `status.json` (the U5 / decision #21 primary path)
+    and a `FleetPoller` fallback (`derive_status_from_transcript`, via `status_from_transcript`)
+    that reads the sentinel straight off the transcript tail. Surfaced as a `fleet drive` CLI
+    command. Integration-verified: a real `claude --bg` manager drove a trivial sample repo to a
+    `HUMAN_GATE` that flowed into FleetState.
 16. **Detached survival vs remote control — they DON'T compose (verified 2.1.195):** `claude --bg`
     gives supervisor-hosted durability + non-interactive observability (`agents --json`, `logs`) +
     reconnect (roster + `respawn`/`--resume`); `--remote-control` (server or interactive) gives

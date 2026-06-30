@@ -178,6 +178,38 @@ class ManagerStatus:
         return cls(state=state or SENTINEL_RUNNING, **fields)
 
 
+def status_from_transcript(
+    lines: Sequence[str],
+    *,
+    sentinel_prefix: str = "ROADMAP_STATE",
+    name: Optional[str] = None,
+) -> Optional[ManagerStatus]:
+    """Derive a :class:`ManagerStatus` from a manager's transcript tail, or ``None``.
+
+    Scans a recent ``claude logs`` tail for a drive-loop sentinel line
+    (``<PREFIX>: <STATE>``, last match wins) and returns a status carrying that
+    sentinel (the matching line becomes the ``summary``). Returns ``None`` if no
+    sentinel is present.
+
+    This is the FALLBACK read path for a manager driving a ``/drive-*`` loop
+    (U13) that has printed its sentinel but not (yet) written a ``status.json``
+    — the primary U5 convention. :class:`~reachy_fleet_supervisor.fleet.state.FleetPoller`
+    uses it (opt-in) so a HUMAN_GATE still flows into FleetState even before/without
+    the on-disk report.
+    """
+    text = "\n".join(lines)
+    state = parse_sentinel(text, sentinel_prefix=sentinel_prefix)
+    if state is None:
+        return None
+    marker = f"{sentinel_prefix}:".lower()
+    summary: Optional[str] = None
+    for raw in lines:
+        stripped = raw.strip()
+        if stripped.lower().startswith(marker):
+            summary = stripped
+    return ManagerStatus(state=state, summary=summary, name=name)
+
+
 def parse_sentinel(text: str, *, sentinel_prefix: str = "ROADMAP_STATE") -> Optional[str]:
     """Return the sentinel state from a ``<PREFIX>: STATE`` line, else ``None``.
 

@@ -16,10 +16,10 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 3
-  next_unit: U13
+  next_unit: U14
   in_progress: ""
   failure_count: 0
-  units_done: 12
+  units_done: 13
   units_total: 26
   # Phase 2 COMPLETE (U1-U10). U11 (Phase 3 run_mode knob) DONE — software complete +
   # green; the optional RC LIVE-CONNECT check (claude.ai-OAuth steering) was SKIPPED by
@@ -34,7 +34,19 @@ status:
   # is `--resume --fork-session -p`, which branches a copy — not chosen). Verified by a
   # REAL bg steering round-trip in tests/fleet/test_manager.py. Fleet suite 261 green.
   #
-  # Now on U13 (Phase 3) — managers run ralph/drive loops (decision #15; dep U5 done).
+  # U13 (Phase 3) DONE — managers run ralph/drive loops (decision #15). fleet/drive.py:
+  # DriveLoopSpec + pure build_drive_task (the claude --bg prompt that runs a /drive-*
+  # loop on a target repo AND emits its per-iteration status.json, escalating HUMAN_GATE
+  # then stopping) + spawn_drive_manager (spawns via SessionManager, cwd=repo). Sentinel
+  # flows into FleetState via the emitted status.json (U5/decision #21 primary path) PLUS
+  # a FleetPoller fallback (derive_status_from_transcript -> status_from_transcript reads
+  # the sentinel off the transcript tail; the live runtime enables it). Surfaced as a
+  # `fleet drive` CLI command. INTEGRATION-VERIFIED: a real claude --bg manager drove a
+  # trivial sample repo to a HUMAN_GATE that flowed into FleetState (test passed in ~24s,
+  # session torn down). Fleet suite 273 green; 0 stray bg agents.
+  #
+  # Now on U14 (Phase 3) — gate policy (config default + per-worker override; decision #13;
+  # deps U1, U13 both done).
   pending_gate: ""
 
 units:
@@ -129,7 +141,7 @@ units:
     phase: 3
     title: Managers run ralph/drive loops  # decision #15
     gate: software
-    status: pending
+    status: done
     deps: [U5]
     acceptance: "A manager can drive a /drive-* loop on its target repo; its HUMAN_GATE sentinel flows into FleetState. Integration tested (a manager driving a trivial sample repo)."
   - id: U14

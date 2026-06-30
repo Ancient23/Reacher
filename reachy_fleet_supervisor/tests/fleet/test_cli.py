@@ -262,6 +262,59 @@ def test_spawn_defaults_run_mode_background(monkeypatch) -> None:
     assert captured["run_mode"] == "background"
 
 
+def test_drive_spawns_drive_loop_manager(monkeypatch, tmp_path) -> None:
+    """`fleet drive` spawns a manager whose task is the built drive-loop prompt (U13)."""
+    from reachy_fleet_supervisor.fleet import build_drive_task, DriveLoopSpec
+
+    _patch_roster(monkeypatch, [])
+    captured: dict = {}
+
+    def fake_spawn(cls, task, *, name, **kwargs):
+        captured["task"] = task
+        captured["name"] = name
+        captured.update(kwargs)
+        return FleetManager(session_id="sid-1", id="drv00000", name=name, cwd=kwargs.get("cwd"))
+
+    monkeypatch.setattr(sm_mod.FleetManager, "spawn", classmethod(fake_spawn))
+    repo = str(tmp_path / "repo")
+    code, out, _ = _run(
+        [
+            "drive",
+            "--name", "roadmap",
+            "--repo", repo,
+            "--command", "/drive-roadmap",
+            "--max-iterations", "2",
+            "--status-dir", str(tmp_path / "st"),
+            "--json",
+        ]
+    )
+    assert code == 0
+    data = json.loads(out)
+    assert data["id"] == "drv00000"
+    assert data["command"] == "/drive-roadmap"
+    assert captured["name"] == "roadmap"
+    assert str(captured["cwd"]) == repo
+    # The spawned task is exactly the built drive-loop prompt for this spec.
+    spec = DriveLoopSpec(
+        name="roadmap", repo=repo, command="/drive-roadmap",
+        max_iterations=2, status_dir=tmp_path / "st",
+    )
+    assert captured["task"] == build_drive_task(spec)
+    assert data["status_path"] == str(spec.status_path())
+
+
+def test_drive_text_output(monkeypatch, tmp_path) -> None:
+    _patch_roster(monkeypatch, [])
+
+    def fake_spawn(cls, task, *, name, **kwargs):
+        return FleetManager(session_id="sid-1", id="drv00000", name=name, cwd=kwargs.get("cwd"))
+
+    monkeypatch.setattr(sm_mod.FleetManager, "spawn", classmethod(fake_spawn))
+    code, out, _ = _run(["drive", "--name", "rm", "--repo", str(tmp_path)])
+    assert code == 0
+    assert "drive manager 'rm'" in out and "/drive-roadmap" in out
+
+
 def test_spawn_duplicate_name_fails(monkeypatch) -> None:
     """Spawning a name already on the roster is rejected (exit 1)."""
     _patch_roster(monkeypatch, [_bg_row("aaaa1111", "alpha")])

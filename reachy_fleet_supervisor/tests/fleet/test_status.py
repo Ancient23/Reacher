@@ -19,6 +19,7 @@ from reachy_fleet_supervisor.fleet import (
     read_status,
     read_status_for,
     read_statuses_for_agents,
+    status_from_transcript,
     status_path_for,
     write_status,
 )
@@ -94,6 +95,27 @@ def test_parse_sentinel_last_match_wins() -> None:
     assert parse_sentinel(text) == "HUMAN_GATE"
     assert parse_sentinel("no sentinel here") is None
     assert parse_sentinel("FOO_STATE: complete", sentinel_prefix="FOO_STATE") == "COMPLETE"
+
+
+def test_status_from_transcript() -> None:
+    """A drive-loop sentinel in the transcript tail derives a status (U13)."""
+    tail = [
+        "iteration 3: wrote tests",
+        "ROADMAP_STATE: HUMAN_GATE",
+    ]
+    s = status_from_transcript(tail, name="alpha")
+    assert s is not None
+    assert s.state == "HUMAN_GATE"
+    assert s.summary == "ROADMAP_STATE: HUMAN_GATE"
+    assert s.name == "alpha"
+    assert s.needs_attention
+    # No sentinel -> None (nothing to derive).
+    assert status_from_transcript(["just working", "no sentinel"]) is None
+    # Custom prefix + last-match-wins.
+    custom = status_from_transcript(
+        ["LOOP_STATE: CONTINUE", "LOOP_STATE: COMPLETE"], sentinel_prefix="LOOP_STATE"
+    )
+    assert custom is not None and custom.state == "COMPLETE"
 
 
 def test_from_report_line() -> None:
@@ -271,5 +293,49 @@ def test_poller_statuses_source_overrides_dir() -> None:
 def test_poller_no_status_config_means_no_report() -> None:
     fs = FleetState()
     poller = FleetPoller(fs, agents_source=lambda: [_bg("aaaa1111", "alpha")])
+    snap = poller.poll_once()
+    assert snap.get("alpha").report is None
+
+
+def test_poller_derives_status_from_transcript_fallback() -> None:
+    """With no status.json, the poller derives a status from the sentinel in logs (U13)."""
+    fs = FleetState()
+    poller = FleetPoller(
+        fs,
+        agents_source=lambda: [_bg("aaaa1111", "alpha")],
+        logs_source=lambda key: ["working...", "ROADMAP_STATE: HUMAN_GATE"],
+        fetch_logs=True,
+        derive_status_from_transcript=True,
+    )
+    snap = poller.poll_once()
+    m = snap.get("alpha")
+    assert m.report is not None and m.report.state == "HUMAN_GATE"
+    assert m.needs_attention
+
+
+def test_poller_status_json_wins_over_transcript() -> None:
+    """An emitted status.json always beats the transcript-derived fallback (U13)."""
+    fs = FleetState()
+    poller = FleetPoller(
+        fs,
+        agents_source=lambda: [_bg("aaaa1111", "alpha")],
+        logs_source=lambda key: ["ROADMAP_STATE: FAILED"],
+        fetch_logs=True,
+        derive_status_from_transcript=True,
+        statuses_source=lambda agents: {"aaaa1111": ManagerStatus(state="CONTINUE")},
+    )
+    snap = poller.poll_once()
+    assert snap.get("alpha").report.state == "CONTINUE"
+
+
+def test_poller_no_fallback_without_flag() -> None:
+    """The transcript fallback is OFF by default (existing behaviour unchanged)."""
+    fs = FleetState()
+    poller = FleetPoller(
+        fs,
+        agents_source=lambda: [_bg("aaaa1111", "alpha")],
+        logs_source=lambda key: ["ROADMAP_STATE: HUMAN_GATE"],
+        fetch_logs=True,
+    )
     snap = poller.poll_once()
     assert snap.get("alpha").report is None

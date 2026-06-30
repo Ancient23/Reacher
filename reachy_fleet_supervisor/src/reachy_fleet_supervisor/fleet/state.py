@@ -43,6 +43,7 @@ from .manager import (
 )
 from .status import (
     ManagerStatus,
+    status_from_transcript,
     read_statuses_for_agents,
 )
 from .identity import AgentColor, assign_colors
@@ -471,6 +472,13 @@ class FleetPoller:
     statuses_source: Optional[
         Callable[[Sequence[AgentInfo]], dict[str, "ManagerStatus"]]
     ] = None
+    # U13: derive a manager's status from its transcript's drive-loop sentinel
+    # line when it has not (yet) written a status.json — the fallback read path
+    # for managers running ralph/drive loops. Off by default so existing
+    # behaviour is unchanged; the live runtime enables it. Needs fetch_logs (or a
+    # logs_source) to have a transcript to scan.
+    derive_status_from_transcript: bool = False
+    sentinel_prefix: str = "ROADMAP_STATE"
 
     _thread: Optional[threading.Thread] = field(default=None, init=False, repr=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
@@ -520,6 +528,22 @@ class FleetPoller:
         agents = self._fetch_agents()
         logs = self._fetch_logs(agents)
         statuses = self._fetch_statuses(agents)
+        if self.derive_status_from_transcript:
+            # Fallback (U13): for any manager WITHOUT an on-disk status.json, scan
+            # its transcript tail for a drive-loop sentinel so a HUMAN_GATE still
+            # flows into FleetState. The emitted status.json (above) always wins.
+            for agent in agents:
+                key = agent.id or agent.session_id
+                if key in statuses:
+                    continue
+                tail = logs.get(key)
+                if not tail:
+                    continue
+                derived = status_from_transcript(
+                    tail, sentinel_prefix=self.sentinel_prefix, name=agent.name
+                )
+                if derived is not None:
+                    statuses[key] = derived
         return self.state.apply(agents, logs=logs, statuses=statuses)
 
     # ---- lifecycle --------------------------------------------------------

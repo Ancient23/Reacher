@@ -13,6 +13,7 @@ Commands::
 
     fleet start              # reconnect to durable bg managers and show the fleet
     fleet spawn <task> --name N [--cwd … --model … --mcp-config … -w]
+    fleet drive --name N --repo R [--command /drive-* --max-iterations K]  # U13 ralph loop
     fleet status [key]       # one poll of FleetState (text or --json)
     fleet logs <key>         # recent `claude logs` tail for one manager
     fleet stop [key] [--rm]  # stop (and optionally remove) a manager, or --all
@@ -35,6 +36,7 @@ from typing import IO, Optional, Sequence
 
 from .state import FleetState, FleetPoller, FleetSnapshot, ManagerSnapshot, tail_logs
 from .control import ControlResult, FleetController
+from .drive import DEFAULT_DRIVE_COMMAND, DEFAULT_SENTINEL_PREFIX, DriveLoopSpec, spawn_drive_manager
 from .manager import DEFAULT_RUN_MODE, DEFAULT_PERMISSION_MODE, FleetManagerError
 from .session_manager import SessionManager
 
@@ -188,6 +190,54 @@ def cmd_spawn(args: argparse.Namespace, out: IO[str], err: IO[str]) -> int:
     else:
         mode_note = "" if mgr.run_mode == "background" else f" [{mgr.run_mode}]"
         print(f"spawned '{mgr.name}' [{mgr.id}]{mode_note} (session {mgr.session_id})", file=out)
+    return 0
+
+
+def cmd_drive(args: argparse.Namespace, out: IO[str], err: IO[str]) -> int:
+    """Spawn a manager that DRIVES a ``/drive-*`` loop on a target repo (U13).
+
+    Builds a :class:`DriveLoopSpec` and spawns a background manager whose task is
+    the drive-loop prompt: it runs ``command`` once per iteration on ``--repo``
+    and emits its sentinel report to its ``status.json`` so the fleet watches it
+    without interrupting it (decision #21). HUMAN_GATE/COMPLETE/FAILED stop it.
+    """
+    sm = _load_session_manager(args)  # so the unique-name check sees existing managers
+    spec = DriveLoopSpec(
+        name=args.name,
+        repo=args.repo,
+        command=args.command,
+        sentinel_prefix=args.sentinel_prefix,
+        max_iterations=args.max_iterations,
+        status_dir=args.status_dir,
+    )
+    mgr = spawn_drive_manager(
+        sm,
+        spec,
+        run_mode=args.run_mode,
+        permission_mode=args.permission_mode,
+        model=args.model,
+    )
+    if args.as_json:
+        json.dump(
+            {
+                "id": mgr.id,
+                "name": mgr.name,
+                "session_id": mgr.session_id,
+                "cwd": mgr.cwd,
+                "run_mode": mgr.run_mode,
+                "command": spec.command,
+                "status_path": str(spec.status_path()),
+            },
+            out,
+            indent=2,
+        )
+        out.write("\n")
+    else:
+        print(
+            f"spawned drive manager '{mgr.name}' [{mgr.id}] driving {spec.command} "
+            f"on {spec.repo} (session {mgr.session_id})",
+            file=out,
+        )
     return 0
 
 
@@ -358,6 +408,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run in a git worktree (optionally named).",
     )
     p_spawn.set_defaults(func=cmd_spawn)
+
+    p_drive = sub.add_parser(
+        "drive",
+        parents=[parent],
+        help="Spawn a manager that drives a /drive-* loop on a target repo (U13).",
+    )
+    p_drive.add_argument("--name", required=True, help="Unique voice/handle name for the manager.")
+    p_drive.add_argument("--repo", required=True, help="Target repo the manager drives (its cwd).")
+    p_drive.add_argument(
+        "--command",
+        default=DEFAULT_DRIVE_COMMAND,
+        help=f"The /drive-* command run each iteration (default: {DEFAULT_DRIVE_COMMAND}).",
+    )
+    p_drive.add_argument(
+        "--sentinel-prefix",
+        dest="sentinel_prefix",
+        default=DEFAULT_SENTINEL_PREFIX,
+        help=f"Drive-loop sentinel line prefix (default: {DEFAULT_SENTINEL_PREFIX}).",
+    )
+    p_drive.add_argument(
+        "--max-iterations",
+        dest="max_iterations",
+        type=int,
+        default=None,
+        help="Bound iterations this session (default: until HUMAN_GATE/COMPLETE/FAILED).",
+    )
+    p_drive.add_argument(
+        "--run-mode",
+        dest="run_mode",
+        choices=["background", "remote-control"],
+        default=DEFAULT_RUN_MODE,
+        help=f"How the manager is hosted (default: {DEFAULT_RUN_MODE}).",
+    )
+    p_drive.add_argument(
+        "--permission-mode",
+        default=DEFAULT_PERMISSION_MODE,
+        help=f"Permission mode (default: {DEFAULT_PERMISSION_MODE}).",
+    )
+    p_drive.add_argument("--model", default=None, help="Model override.")
+    p_drive.set_defaults(func=cmd_drive)
 
     p_status = sub.add_parser("status", parents=[parent], help="Show fleet status (one poll).")
     p_status.add_argument("key", nargs="?", default=None, help="Optional manager id/name to filter to.")
