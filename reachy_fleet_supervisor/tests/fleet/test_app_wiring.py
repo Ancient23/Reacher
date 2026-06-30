@@ -219,6 +219,92 @@ def test_voice_spawn_makes_manager_visible_on_dashboard(tmp_path: Path) -> None:
     assert "tester" in names
 
 
+def _capturing_runtime() -> tuple[FleetRuntime, dict]:
+    """A runtime whose SessionManager records the kwargs spawn() was called with."""
+    captured: dict = {}
+
+    class _CapturingManager:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.id = name[:8]
+
+    class _CapturingSessionManager:
+        def spawn(self, task: str, *, name: str, cwd: str, permission_mode: str, **kw: object):
+            captured["task"] = task
+            captured["name"] = name
+            captured["cwd"] = cwd
+            captured["permission_mode"] = permission_mode
+            return _CapturingManager(name)
+
+    state = FleetState()
+    rt = FleetRuntime(
+        state=state,
+        session_manager=_CapturingSessionManager(),  # type: ignore[arg-type]
+        poller=FleetPoller(state, agents_source=lambda: []),
+    )
+    return rt, captured
+
+
+def test_voice_spawn_defaults_to_non_interactive_permission_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """U10 deadlock fix: the voice tool spawns with bypassPermissions by default.
+
+    A ``claude --bg`` manager has no TTY; a prompting mode leaves it ``blocked``
+    ``waitingFor: permission prompt`` forever. The voice path must pass the
+    non-interactive default through to SessionManager.spawn.
+    """
+    monkeypatch.delenv("FLEET_PERMISSION_MODE", raising=False)
+    rt, captured = _capturing_runtime()
+    set_fleet_runtime(rt)
+    SpawnManager = _load_spawn_manager_cls()
+    out = asyncio.run(SpawnManager()(None, name="tester", path=str(tmp_path), task="run tests"))
+    assert out["status"] == "spawned"
+    assert captured["permission_mode"] == "bypassPermissions"
+
+
+def test_voice_spawn_permission_mode_override_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit permission_mode from the voice tool is honored."""
+    monkeypatch.delenv("FLEET_PERMISSION_MODE", raising=False)
+    rt, captured = _capturing_runtime()
+    set_fleet_runtime(rt)
+    SpawnManager = _load_spawn_manager_cls()
+    out = asyncio.run(
+        SpawnManager()(None, name="tester", path=str(tmp_path), task="t", permission_mode="acceptEdits")
+    )
+    assert out["status"] == "spawned"
+    assert captured["permission_mode"] == "acceptEdits"
+
+
+def test_voice_spawn_env_sets_default_permission_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """$FLEET_PERMISSION_MODE configures the default when no override is given."""
+    monkeypatch.setenv("FLEET_PERMISSION_MODE", "dontAsk")
+    rt, captured = _capturing_runtime()
+    set_fleet_runtime(rt)
+    SpawnManager = _load_spawn_manager_cls()
+    asyncio.run(SpawnManager()(None, name="tester", path=str(tmp_path), task="t"))
+    assert captured["permission_mode"] == "dontAsk"
+
+
+def test_voice_spawn_rejects_invalid_permission_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bogus permission_mode is reported (spoken back), not spawned."""
+    monkeypatch.delenv("FLEET_PERMISSION_MODE", raising=False)
+    rt, captured = _capturing_runtime()
+    set_fleet_runtime(rt)
+    SpawnManager = _load_spawn_manager_cls()
+    out = asyncio.run(
+        SpawnManager()(None, name="tester", path=str(tmp_path), task="t", permission_mode="yolo")
+    )
+    assert "error" in out and "permission mode" in out["error"].lower()
+    assert captured == {}  # never reached spawn
+
+
 def test_spawn_manager_rejects_missing_project_path(tmp_path: Path) -> None:
     """A bad path is reported (spoken back), not silently spawned."""
     rt = FleetRuntime(

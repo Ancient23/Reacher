@@ -35,9 +35,57 @@ def test_project_defaults() -> None:
     project = ProjectConfig(name="p", path="/tmp/p")
     assert project.defaults.run_mode == "background"
     assert project.defaults.model is None
+    assert project.defaults.permission_mode is None
     assert project.defaults.gate_policy is None
     assert project.env == {}
     assert project.mcp == []
+
+
+# ---------------------------------------------------------------------------
+# Permission mode (U10 deadlock fix): fleet default + per-project override
+# ---------------------------------------------------------------------------
+
+
+def test_fleet_default_permission_mode_is_non_interactive() -> None:
+    """Default permission mode is bypassPermissions so managers don't deadlock."""
+    assert FleetConfig().permission_mode == "bypassPermissions"
+
+
+def test_permission_mode_for_uses_fleet_default_when_project_unset() -> None:
+    cfg = parse_fleet_config({"projects": [{"name": "a", "path": "/x"}]})
+    assert cfg.permission_mode_for("a") == "bypassPermissions"
+
+
+def test_permission_mode_for_project_override_wins() -> None:
+    """A project's permission_mode overrides the fleet-wide default."""
+    cfg = parse_fleet_config(
+        {
+            "permission_mode": "bypassPermissions",
+            "projects": [
+                {"name": "a", "path": "/x", "defaults": {"permission_mode": "acceptEdits"}},
+                {"name": "b", "path": "/y"},
+            ],
+        }
+    )
+    assert cfg.permission_mode_for("a") == "acceptEdits"  # override
+    assert cfg.permission_mode_for("b") == "bypassPermissions"  # fleet default
+
+
+def test_custom_fleet_default_permission_mode_honored() -> None:
+    cfg = parse_fleet_config({"permission_mode": "acceptEdits", "projects": []})
+    assert cfg.permission_mode == "acceptEdits"
+
+
+def test_invalid_fleet_permission_mode_rejected() -> None:
+    with pytest.raises(FleetConfigError):
+        parse_fleet_config({"permission_mode": "yolo", "projects": []})
+
+
+def test_invalid_project_permission_mode_rejected() -> None:
+    with pytest.raises(FleetConfigError):
+        parse_fleet_config(
+            {"projects": [{"name": "a", "path": "/x", "defaults": {"permission_mode": "nope"}}]}
+        )
 
 
 # ---------------------------------------------------------------------------

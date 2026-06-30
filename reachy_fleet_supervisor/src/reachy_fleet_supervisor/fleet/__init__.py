@@ -100,6 +100,8 @@ from .status import (
 )
 from .manager import (
     DEFAULT_PERMISSION_MODE,
+    PERMISSION_MODE_ENV,
+    VALID_PERMISSION_MODES,
     AgentInfo,
     FleetManager,
     FleetManagerError,
@@ -109,6 +111,8 @@ from .manager import (
     parse_agents_json,
     parse_spawn_output,
     resolve_claude_bin,
+    resolve_permission_mode,
+    validate_permission_mode,
 )
 from .identity import (
     PALETTE,
@@ -157,7 +161,11 @@ __all__ = [
     "parse_spawn_output",
     "parse_agents_json",
     "resolve_claude_bin",
+    "resolve_permission_mode",
+    "validate_permission_mode",
     "DEFAULT_PERMISSION_MODE",
+    "PERMISSION_MODE_ENV",
+    "VALID_PERMISSION_MODES",
     # session manager (U3)
     "SessionManager",
     "AgentPredicate",

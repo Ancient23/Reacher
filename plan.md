@@ -264,6 +264,24 @@ is just a subscriber to FleetState. Nothing polls the workers directly.
     same in both run modes. Each manager therefore **emits status to a known place every iteration**;
     Reachy/dashboard/CLI all read it. Two-way follow-up ("why did you do X?") is *steering*: native in
     `remote-control`, the #16 to-verify path (`claude --resume <id> -p`) in `background`.
+22. **Managers spawn non-interactively — `permission_mode` default `bypassPermissions` (U10 fix).**
+    A `claude --bg` manager has **no TTY**, so any permission mode that still prompts (`default`,
+    `acceptEdits` for shell/commands) leaves it **`state: blocked`, `waitingFor: permission prompt`
+    forever** — the deadlock the first live U10 run hit (the dashboard showed Claude Code's
+    interactive *"bypass permissions on (shift+tab to cycle)"* UI with no way to answer). Managers are
+    trusted, local, autonomous drive-loop drivers that escalate genuine blockers as a HUMAN_GATE in
+    FleetState, **not** via a dead prompt — so the default `--permission-mode` is **`bypassPermissions`**
+    (verified an accepted value for Claude Code 2.1.196; the full choice set is `acceptEdits, auto,
+    bypassPermissions, default, dontAsk, plan`). Empirically validated: a `--bg` spawn with
+    `bypassPermissions` on a task needing a file-write + shell command runs `working → done` and never
+    `waitingFor` a prompt, whereas managers spawned without it deadlock. **SECURITY: `bypassPermissions`
+    skips ALL permission checks for that session** (file writes, shell, network) — only point a manager
+    at a repo you trust it to act in unattended. It is **configurable**, not hardcoded: fleet-config
+    default `[fleet].permission_mode`, per-project override `[[fleet.projects]].defaults.permission_mode`,
+    the `FLEET_PERMISSION_MODE` env var for the live/voice path, and an explicit per-spawn / voice-tool
+    `permission_mode` argument (precedence: explicit arg > env > built-in default). To run managers
+    gated instead, set one of those to e.g. `acceptEdits` (note: it will then block on shell-command
+    prompts until U12 interactive approve/steer controls exist).
 
 ## 7. How to run
 

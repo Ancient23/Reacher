@@ -60,6 +60,16 @@ class SpawnManager(Tool):
                 "type": "string",
                 "description": "What the manager should do, described in plain language.",
             },
+            "permission_mode": {
+                "type": "string",
+                "enum": ["acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"],
+                "description": (
+                    "Optional. How autonomous the manager is. Leave unset for the trusted-local "
+                    "default (bypassPermissions) so it runs without deadlocking on a permission "
+                    "prompt it cannot answer. Only set this if the user explicitly asks to run a "
+                    "manager more cautiously (e.g. 'acceptEdits' to gate shell commands)."
+                ),
+            },
         },
         "required": ["name", "task"],
     }
@@ -79,13 +89,29 @@ class SpawnManager(Tool):
         if not Path(cwd).is_dir():
             return {"error": f"project path not found: {cwd}"}
 
+        # Resolve the permission mode (explicit arg > $FLEET_PERMISSION_MODE >
+        # bypassPermissions). A background manager has NO TTY, so a prompting mode
+        # would deadlock it (state: blocked, waitingFor: permission prompt) — the
+        # reported U10 bug. bypassPermissions runs it non-interactively.
+        from reachy_fleet_supervisor.fleet.manager import (
+            FleetManagerError,
+            resolve_permission_mode,
+        )
+
+        try:
+            permission_mode = resolve_permission_mode(kwargs.get("permission_mode"))
+        except FleetManagerError as e:
+            return {"error": str(e)}
+
         try:
             from reachy_fleet_supervisor.fleet.runtime import get_fleet_runtime
 
             runtime = get_fleet_runtime()
             # spawn() shells out to `claude --bg` (blocking) — keep it off the loop.
             manager = await asyncio.to_thread(
-                runtime.session_manager.spawn, task, name=name, cwd=cwd
+                lambda: runtime.session_manager.spawn(
+                    task, name=name, cwd=cwd, permission_mode=permission_mode
+                )
             )
             # Nudge an immediate poll so the dashboard/body update without waiting
             # for the next interval. Best-effort: the loop will catch up regardless.
@@ -94,7 +120,10 @@ class SpawnManager(Tool):
             except Exception:  # noqa: BLE001
                 logger.debug("post-spawn poll_once failed; poller will catch up", exc_info=True)
 
-            logger.info("spawn_manager: spawned '%s' (id=%s) on %s", manager.name, manager.id, cwd)
+            logger.info(
+                "spawn_manager: spawned '%s' (id=%s, permission_mode=%s) on %s",
+                manager.name, manager.id, permission_mode, cwd,
+            )
             return {
                 "status": "spawned",
                 "name": manager.name,

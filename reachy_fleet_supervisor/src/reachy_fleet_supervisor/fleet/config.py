@@ -37,6 +37,8 @@ from pathlib import Path
 import tomllib
 from pydantic import Field, BaseModel, ConfigDict, field_validator, model_validator
 
+from .manager import DEFAULT_PERMISSION_MODE, VALID_PERMISSION_MODES
+
 
 # Per-manager run mode (decision #19): how the session runs, independent of what
 # work pattern it executes. ``background`` = ``claude --bg`` (durable, the
@@ -124,12 +126,25 @@ class ProjectDefaults(_StrictModel):
 
     A project may override the fleet-wide gate policy via ``gate_policy``; when
     unset the fleet default applies (resolved by ``FleetConfig.gate_policy_for``).
+    Likewise ``permission_mode`` overrides the fleet-wide default
+    (``FleetConfig.permission_mode``, resolved by ``permission_mode_for``); when
+    unset the fleet default applies. A spawned manager has no TTY, so a mode that
+    still prompts deadlocks it — see ``manager.DEFAULT_PERMISSION_MODE``.
     """
 
     run_mode: RunMode = "background"
     model: str | None = None
     permission_mode: str | None = None
     gate_policy: GatePolicy | None = None
+
+    @field_validator("permission_mode")
+    @classmethod
+    def _valid_permission_mode(cls, value: str | None) -> str | None:
+        if value is not None and value not in VALID_PERMISSION_MODES:
+            raise ValueError(
+                f"invalid permission_mode {value!r}; valid: {sorted(VALID_PERMISSION_MODES)}"
+            )
+        return value
 
 
 class ProjectConfig(_StrictModel):
@@ -170,10 +185,29 @@ class ProjectConfig(_StrictModel):
 
 
 class FleetConfig(_StrictModel):
-    """The whole fleet config: projects + a default gate policy."""
+    """The whole fleet config: projects + a default gate policy.
+
+    ``permission_mode`` is the fleet-wide default ``--permission-mode`` for
+    spawned managers (overridable per project via ``ProjectDefaults`` and per
+    spawn at the call site / voice tool). It defaults to
+    ``manager.DEFAULT_PERMISSION_MODE`` (``bypassPermissions``) so a trusted local
+    manager runs non-interactively and does not deadlock on a permission prompt
+    it has no TTY to answer. SECURITY: ``bypassPermissions`` skips all permission
+    checks for that session — change this if you want managers gated.
+    """
 
     projects: list[ProjectConfig] = Field(default_factory=list)
     default_gate_policy: GatePolicy = Field(default_factory=GatePolicy)
+    permission_mode: str = DEFAULT_PERMISSION_MODE
+
+    @field_validator("permission_mode")
+    @classmethod
+    def _valid_permission_mode(cls, value: str) -> str:
+        if value not in VALID_PERMISSION_MODES:
+            raise ValueError(
+                f"invalid permission_mode {value!r}; valid: {sorted(VALID_PERMISSION_MODES)}"
+            )
+        return value
 
     @model_validator(mode="after")
     def _unique_project_names(self) -> FleetConfig:
@@ -195,6 +229,11 @@ class FleetConfig(_StrictModel):
         """Effective gate policy for a project: its override or the fleet default."""
         override = self.project(name).defaults.gate_policy
         return override if override is not None else self.default_gate_policy
+
+    def permission_mode_for(self, name: str) -> str:
+        """Effective ``--permission-mode`` for a project: override or fleet default."""
+        override = self.project(name).defaults.permission_mode
+        return override if override is not None else self.permission_mode
 
 
 def load_fleet_config(path: str | Path) -> FleetConfig:

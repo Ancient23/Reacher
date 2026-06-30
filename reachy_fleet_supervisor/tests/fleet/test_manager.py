@@ -13,6 +13,8 @@ import shutil
 import pytest
 
 from reachy_fleet_supervisor.fleet import (
+    DEFAULT_PERMISSION_MODE,
+    PERMISSION_MODE_ENV,
     AgentInfo,
     FleetManager,
     FleetManagerError,
@@ -21,6 +23,8 @@ from reachy_fleet_supervisor.fleet import (
     build_spawn_argv,
     parse_agents_json,
     parse_spawn_output,
+    resolve_permission_mode,
+    validate_permission_mode,
 )
 
 
@@ -60,6 +64,45 @@ def test_build_spawn_argv_optionals() -> None:
     assert argv[argv.index("-w") + 1] == "feature"
     assert "--add-dir" in argv and "/x" in argv
     assert argv[-1] == "task"
+
+
+def test_default_permission_mode_is_non_interactive() -> None:
+    """The default must be a mode that does NOT prompt — a bg manager has no TTY.
+
+    Regression for the U10 deadlock: spawning with ``default``/``acceptEdits``
+    leaves a background manager ``blocked`` ``waitingFor: permission prompt``.
+    """
+    assert DEFAULT_PERMISSION_MODE == "bypassPermissions"
+
+
+def test_build_spawn_argv_rejects_invalid_permission_mode() -> None:
+    """An invalid permission mode fails loudly in-process, not mid-spawn."""
+    with pytest.raises(FleetManagerError):
+        build_spawn_argv("t", name="m", session_id="s", permission_mode="yolo")
+
+
+def test_validate_permission_mode_accepts_known_and_rejects_unknown() -> None:
+    for mode in ("acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"):
+        assert validate_permission_mode(mode) == mode
+    with pytest.raises(FleetManagerError):
+        validate_permission_mode("nope")
+
+
+def test_resolve_permission_mode_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explicit override > $FLEET_PERMISSION_MODE > built-in default."""
+    monkeypatch.delenv(PERMISSION_MODE_ENV, raising=False)
+    # default
+    assert resolve_permission_mode() == DEFAULT_PERMISSION_MODE
+    assert resolve_permission_mode("") == DEFAULT_PERMISSION_MODE
+    # env wins over default
+    monkeypatch.setenv(PERMISSION_MODE_ENV, "acceptEdits")
+    assert resolve_permission_mode() == "acceptEdits"
+    # explicit override wins over env
+    assert resolve_permission_mode("plan") == "plan"
+    # invalid (from any source) still raises
+    monkeypatch.setenv(PERMISSION_MODE_ENV, "bogus")
+    with pytest.raises(FleetManagerError):
+        resolve_permission_mode()
 
 
 def test_build_spawn_argv_worktree_true_is_bare_flag() -> None:

@@ -30,6 +30,7 @@ background session that is always cleaned up).
 """
 
 from __future__ import annotations
+import os
 import json
 import time
 import uuid
@@ -49,9 +50,30 @@ logger = logging.getLogger(__name__)
 _SPAWN_SEP = "·"
 _SPAWN_MARKER = "backgrounded"
 
-# Default permission mode for managers: they run autonomously inside the user's
-# approved intent (matches WorkerSession in claude_brain.py). Override per spawn.
+# Valid ``--permission-mode`` values, verified against Claude Code 2.1.196
+# (``claude --help`` choices: acceptEdits, auto, bypassPermissions, default,
+# dontAsk, plan). We validate against this set so an invalid mode fails loudly
+# in-process rather than being rejected mid-spawn by the CLI.
+VALID_PERMISSION_MODES = frozenset(
+    {"acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"}
+)
+
+# Default permission mode for managers. A fleet manager is a TRUSTED, LOCAL
+# ``claude --bg`` agent with NO TTY: it cannot answer an interactive permission
+# prompt, so any mode that still prompts (``default``/``acceptEdits`` for
+# bash/commands) DEADLOCKS it forever (the reported U10 bug — ``state: blocked``,
+# ``waitingFor: permission prompt``). ``bypassPermissions`` runs fully
+# non-interactively, matching the project's premise: managers drive drive-loops
+# autonomously and escalate genuine blockers as a HUMAN_GATE in FleetState, not
+# via a dead TUI prompt. SECURITY: ``bypassPermissions`` SKIPS ALL permission
+# checks for that session (file writes, shell, network) — only point a manager
+# at a repo you trust it to act in unattended. Override per spawn / per project /
+# via the ``FLEET_PERMISSION_MODE`` env var (see :func:`resolve_permission_mode`).
 DEFAULT_PERMISSION_MODE = "bypassPermissions"
+
+# Env var that overrides the built-in default for the live/voice spawn path
+# (mirrors claude_brain.py's WorkerSession knob). A per-spawn argument still wins.
+PERMISSION_MODE_ENV = "FLEET_PERMISSION_MODE"
 
 # Default timeouts (seconds). Spawn returns immediately but allow headroom for
 # the daemon to start; stop/rm/list are quick.
@@ -83,6 +105,36 @@ def short_id_for(session_id: str) -> str:
     return session_id.split("-", 1)[0]
 
 
+def validate_permission_mode(mode: str) -> str:
+    """Return *mode* if it is a valid ``--permission-mode`` value, else raise.
+
+    Guards against typos / invented values reaching the CLI (where a bad value is
+    a hard spawn failure). Validated against :data:`VALID_PERMISSION_MODES`.
+    """
+    cleaned = (mode or "").strip()
+    if cleaned not in VALID_PERMISSION_MODES:
+        raise FleetManagerError(
+            f"invalid permission mode {mode!r}; valid values are "
+            f"{sorted(VALID_PERMISSION_MODES)}"
+        )
+    return cleaned
+
+
+def resolve_permission_mode(override: Optional[str] = None) -> str:
+    """Resolve the effective permission mode for a spawn.
+
+    Precedence (highest first): an explicit *override* argument, then the
+    ``FLEET_PERMISSION_MODE`` environment variable, then
+    :data:`DEFAULT_PERMISSION_MODE`. The result is validated. This is the single
+    configurable knob the voice ``spawn_manager`` tool and the runtime use so a
+    trusted local manager runs non-interactively by default but the user can
+    change it without editing code.
+    """
+    candidate = override if (override and override.strip()) else os.getenv(PERMISSION_MODE_ENV)
+    candidate = candidate if (candidate and candidate.strip()) else DEFAULT_PERMISSION_MODE
+    return validate_permission_mode(candidate)
+
+
 def build_spawn_argv(
     task: str,
     *,
@@ -108,6 +160,8 @@ def build_spawn_argv(
         raise FleetManagerError("manager name must not be empty")
     if not session_id or not session_id.strip():
         raise FleetManagerError("manager session_id must not be empty")
+    # Fail loudly here rather than letting the CLI reject an invalid mode.
+    permission_mode = validate_permission_mode(permission_mode)
 
     argv: list[str] = [
         claude_bin,
