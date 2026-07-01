@@ -57,7 +57,30 @@ status:
   # 10 new tests; fleet suite 283 green; 0 stray bg agents.
   #
   # U15 (Phase 3) IN PROGRESS — gate -> voice escalation (decision #17; HARDWARE).
-  # Software COMPLETE + fleet suite 303 green (+20 voice tests). Voice is now a
+  # PROBLEM-FIX PASS (human live test 2026-06-30) — fleet suite 319 green (+16):
+  #   (1) MISSED VOICE GATE root cause: speakable_kind only spoke a gate off the
+  #   emitted HUMAN_GATE sentinel; a manager that merely BLOCKS waiting on the human
+  #   (roster state=blocked / waitingFor set, no sentinel — e.g. Claude asked a
+  #   clarifying question) returned None → silent. Fixed: speakable_kind now also
+  #   maps a generic blocked/waiting roster row to VOICE_GATE (mirrors
+  #   ManagerSnapshot.needs_attention + the body renderer), and voice_phrase_for
+  #   folds in the waitingFor text. Verified end-to-end through the REAL
+  #   FleetPoller->FleetState->FleetVoiceRenderer chain (test_integration) + a real
+  #   bg probe (working->done spoke "finished").
+  #   (2) DISAPPEARING CARD + missed gate SHARED root cause: a manager that emits
+  #   its gate/completion then EXITS dropped out of the default `claude agents
+  #   --json` roster, vanishing from FleetState (card gone; no terminal snapshot to
+  #   speak). Fixed: build_fleet_runtime now polls with include_all=True so
+  #   finished/gated bg managers are retained (status.json + log tail still resolve
+  #   their state). Dashboard cards widened (minmax 400px) + taller wrapped
+  #   transcript; disappearing-widget regression test added.
+  #   (3) MOTION jerk (U8 human ask): added pure ease_in_out smoothstep in
+  #   fleet/body.py (zero end-point velocity), applied in GotoQueueMove.evaluate,
+  #   and bumped make_goto_applier duration 1.0->1.6s so turns glide. Easing math
+  #   unit-tested (monotonic, bounded, no overshoot, reaches target, symmetric).
+  # Still HARDWARE-gated (audio/voice/motion) — re-raised pending_gate below.
+  #
+  # Prior software baseline (unchanged): Voice is a
   # renderer of FleetState alongside the body: fleet/voice.py FleetVoiceRenderer
   # (edge-triggered FleetState subscriber) speaks on state CHANGES — task
   # COMPLETION, build/test FAILED, and HUMAN_GATE "needs you" — reusing U14
@@ -72,8 +95,19 @@ status:
   # -p, U12/decision #16) + persona instructions. HARDWARE gate: audio/voice
   # needs the physical robot, so the spoken path is human-verified (pending_gate).
   pending_gate: |
-    U15 gate -> voice escalation: confirm by VOICE on the robot (decision #17).
-    Audio/voice cannot be self-verified; please verify on the physical robot.
+    U15 gate -> voice escalation (RE-RAISED after human test feedback 2026-06-30).
+    Audio/voice + robot motion cannot be self-verified; please re-test on the robot.
+
+    WHAT WAS FIXED since the last gate (all software-tested, fleet suite 319 green):
+    - MISSED VOICE GATE: a manager that just BLOCKS waiting on the human (roster
+      state=blocked / waitingFor set, e.g. Claude asked a clarifying question) with
+      NO HUMAN_GATE sentinel was silent. Voice now speaks that generic blocked/waiting
+      state too (verified end-to-end through the real poller->state->voice chain).
+    - DISAPPEARING CARD + missed gate shared root cause: a manager that emits its
+      gate/completion and then EXITS dropped out of the roster (poller now polls
+      `--all`), so its card stays AND its terminal state is still spoken.
+    - MOTION now eased (smoothstep ease-in/out + longer 1.6s glide) so turns are
+      SMOOTH, not jerky. run.ps1 launches clean.
 
     SETUP
     1. Power the robot on the REAR USB-C port (validated-stable; front/USB-B browns out).
@@ -81,27 +115,38 @@ status:
          cd reachy_fleet_supervisor; ./run.ps1
        Wait until voice is live (you can talk to Reachy) and http://127.0.0.1:7860/fleet loads.
 
-    TEST A — speak on COMPLETION (the human's explicit ask: speak on completion, not just gates)
-    3. By VOICE say: "Spawn a manager named greeter on C:/Source/reacher that creates a file
+    TEST A — speak on COMPLETION (re-verify it still works)
+    3. By VOICE: "Spawn a manager named greeter on C:/Source/reacher that creates a file
        hello.txt containing hi, then stop."  (Reachy calls spawn_manager; watch it on /fleet.)
-    4. LISTEN: when it finishes, Reachy should SPEAK the completion aloud (e.g. "the greeter
-       finished its task") — not merely emote. (Body still signals; voice now says it too.)
+    4. LISTEN: when it finishes, Reachy SPEAKS the completion aloud (e.g. "greeter finished
+       its task"). LOOK: the greeter card stays on /fleet (does not vanish) and shows done.
 
-    TEST B — speak on a GATE ("needs you") + resume by voice
-    5. By VOICE: "Spawn a manager named builder on C:/Source/reacher that runs a build which
-       fails, reports HUMAN_GATE, and waits."  (Or point it at a trivial repo whose build fails.)
-    6. LISTEN: Reachy should SPEAK the escalation aloud, e.g. "heads up — builder failed and
-       needs you" / "builder needs you: <gate question>".
-    7. ANSWER BY VOICE, e.g.: "Tell builder to skip the failing step and continue."
+    TEST B — speak on a GATE ("needs you") + resume by voice  (the fixed path)
+    5. By VOICE: "Spawn a manager named builder on C:/Source/reacher that asks me a
+       clarifying question and waits for my answer."  (This parks it blocked/waitingFor —
+       the exact case that was silent before. A build that fails + reports HUMAN_GATE also works.)
+    6. LISTEN: Reachy SPEAKS the escalation aloud, e.g. "builder needs you: <the question>"
+       (or "heads up — builder failed and needs you"). LOOK: builder card is present and
+       flagged for attention on /fleet.
+    7. ANSWER BY VOICE, e.g.: "Tell builder to use port 8080 and continue."
        EXPECT: Reachy calls answer_gate and confirms aloud ("answered builder and resumed its
-       work"); on /fleet the builder leaves the gated/failed state and continues (loop resumes).
+       work"); on /fleet builder leaves the gated state and continues.
+
+    TEST C — dashboard readability + motion smoothness
+    8. Open http://127.0.0.1:7860/fleet: confirm ALL spawned managers show as cards (none
+       missing), the cards are readable/wide enough, and the transcript details expand AND
+       stay open across the ~2s live polls.
+    9. WATCH the robot as it turns between managers / signals attention: motion should be
+       SMOOTH (eases in and out), not abrupt/jerky. Idle breathing still runs.
 
     CLEANUP
-    8. By VOICE: "Stop and remove the greeter and builder managers"  (or: `claude stop <id>` +
-       `claude rm <id>` for each). Confirm `claude agents --json` shows no stray bg managers.
+    10. By VOICE: "Stop and remove the greeter and builder managers"  (or `claude stop <id>`
+        + `claude rm <id>` for each). Confirm `claude agents --json` shows no stray bg managers
+        (your interactive reacher-7f + run.ps1 app may remain).
 
-    PASS if: Reachy SPEAKS task completion AND the failure/gate "needs you", and a spoken answer
-    resumes the gated manager's loop. Report PASS, or describe what was/wasn't spoken.
+    PASS if: Reachy SPEAKS completion (A) AND the blocked/gate "needs you" (B), a spoken answer
+    resumes the gated manager, every card is visible + readable + expandable (C8), and motion
+    is smooth (C9). Report PASS, or describe exactly what was/wasn't spoken/seen.
 
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------

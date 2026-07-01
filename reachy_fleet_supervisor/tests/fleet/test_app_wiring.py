@@ -115,6 +115,14 @@ def test_build_runtime_poller_keeps_only_background_managers() -> None:
     assert not rt.poller.running, "build must not start the poller"
 
 
+def test_build_runtime_polls_with_all_to_retain_terminal_managers() -> None:
+    # Disappearing-widget / missed-gate fix: the live poller must poll `claude
+    # agents --json --all` so a manager that emits HUMAN_GATE/COMPLETE and then
+    # EXITS stays in FleetState (its card survives + its gate is still spoken).
+    rt = build_fleet_runtime(reconnect=False, fetch_logs=False)
+    assert rt.poller.include_all is True
+
+
 # ---------------------------------------------------------------------------
 # mount_fleet_dashboard — exactly what main.run calls to serve /fleet
 # ---------------------------------------------------------------------------

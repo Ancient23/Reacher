@@ -198,6 +198,28 @@ def test_attention_card_marked() -> None:
     assert "card attention" in cards
 
 
+def test_gated_manager_still_rendered_as_card() -> None:
+    """Regression (disappearing-widget bug): a manager that gated/blocked — or
+    emitted a HUMAN_GATE report — must STILL render as its own card, never be
+    dropped from the grid. A working peer and the gated one both appear."""
+    state = _state_with(
+        _agent("aaa111", "alice", state="working"),
+        _agent("bbb222", "bob", state="blocked", waitingFor="which port?"),
+        statuses={"bbb222": ManagerStatus(state="HUMAN_GATE", name="bob", gate="which port?")},
+    )
+    cards = render_cards(state.snapshot)
+    assert cards.count('<article class="card') == 2, "both managers must render"
+    assert "bbb222" in cards and "aaa111" in cards
+    assert "card attention" in cards  # the gated one is flagged, not vanished
+
+
+def test_grid_cards_are_wide_enough() -> None:
+    """Regression (too-narrow cards): the grid columns request a comfortably wide
+    minimum so cards are readable, not squeezed into a narrow strip."""
+    page = render_page(FleetState().snapshot, title="t", poll_ms=2000)
+    assert "minmax(min(100%, 400px), 1fr)" in page
+
+
 def test_healthz() -> None:
     """Liveness probe responds ok."""
     client = TestClient(create_dashboard_app(FleetState()))

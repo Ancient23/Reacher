@@ -81,7 +81,7 @@ def build_fleet_runtime(
     interval: float = DEFAULT_POLL_INTERVAL,
     predicate: Optional[AgentPredicate] = _is_background,
     fetch_logs: bool = True,
-    include_all: bool = False,
+    include_all: bool = True,
     status_dir: Optional[str] = None,
     reconnect: bool = True,
 ) -> FleetRuntime:
@@ -91,6 +91,16 @@ def build_fleet_runtime(
     re-attaches, plan.md §4 persistence) unless *reconnect* is ``False``. The
     poller keeps only background managers by default (*predicate*) so unrelated
     foreground sessions on the host are ignored.
+
+    ``include_all`` defaults to ``True`` (the disappearing-widget / missed-gate
+    fix): a manager that emits ``HUMAN_GATE``/``COMPLETE`` and then EXITS (the U13
+    drive loop stops after escalating) drops out of the default ``claude agents
+    --json`` roster, which used to make its dashboard card vanish AND rob the voice
+    renderer of the terminal snapshot it needs to speak. Polling with ``--all``
+    keeps such finished/gated background managers in :class:`FleetState` (their
+    on-disk ``status.json`` and log tail still resolve their real state) so the
+    card stays put and the gate/completion is spoken. Interactive sessions are
+    still filtered out by *predicate*; ``claude rm`` clears a finished manager.
     """
     state = FleetState()
     session_manager = SessionManager(claude_bin=claude_bin)

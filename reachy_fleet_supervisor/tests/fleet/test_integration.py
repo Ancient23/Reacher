@@ -43,6 +43,9 @@ from reachy_fleet_supervisor.fleet import (  # noqa: E402
     ManagerStatus,
     SessionManager,
     FleetBodyRenderer,
+    FleetVoiceRenderer,
+    VOICE_GATE,
+    VOICE_COMPLETED,
     body_signal_for,
     snapshot_payload,
     create_dashboard_app,
@@ -180,6 +183,50 @@ def test_body_holds_attention_poses_but_lets_working_relax() -> None:
     before = len(held)
     state.apply([_row("a1", "alpha", "working")], now=3.0)
     assert len(held) == before
+
+
+# ---------------------------------------------------------------------------
+# Missed-gate reproduction: the FULL poller → state → voice signal path fires a
+# spoken escalation when a manager goes blocked/waiting on the human (PROBLEM 1),
+# deterministically (injected roster source; no subprocess).
+# ---------------------------------------------------------------------------
+
+
+def test_voice_speaks_when_manager_blocks_waiting_on_human_via_poller() -> None:
+    """A manager that goes `working` → `blocked`/`waitingFor` (with NO emitted
+    HUMAN_GATE sentinel — e.g. Claude asked a clarifying question and parked) must
+    drive a spoken escalation through the real FleetPoller → FleetState →
+    FleetVoiceRenderer chain. This is the exact path that was silent before."""
+    spoken: list[str] = []
+    state = FleetState()
+    voice = FleetVoiceRenderer(speak=spoken.append)
+    voice.attach(state, fire_immediately=False)
+
+    # Roster source we can flip: first working, then blocked+waitingFor. No status.
+    rows = {"cur": [_row("builder", "builder", "working")]}
+    poller = FleetPoller(state, agents_source=lambda: rows["cur"])
+
+    poller.poll_once()  # prime — working, nothing spoken
+    assert spoken == []
+
+    rows["cur"] = [
+        AgentInfo.from_dict(
+            {
+                "id": "builder",
+                "sessionId": "builder-0000-0000-0000-000000000000",
+                "kind": "background",
+                "name": "builder",
+                "cwd": "/proj",
+                "state": "blocked",
+                "status": "idle",
+                "waitingFor": "which port should it bind?",
+            }
+        )
+    ]
+    poller.poll_once()  # now waiting on the human → must speak an escalation
+    assert len(spoken) == 1, spoken
+    assert "builder" in spoken[0]
+    assert "which port should it bind?" in spoken[0]
 
 
 # ---------------------------------------------------------------------------

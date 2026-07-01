@@ -48,6 +48,39 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Motion smoothing (pure; unit-tested without hardware)
+# ---------------------------------------------------------------------------
+#
+# The body was reported as moving abruptly/jerkily (U8 human feedback). The
+# cause is a LINEAR interpolation in :class:`GotoQueueMove` — constant velocity
+# that jumps from 0 to full speed at the start of a move and slams back to 0 at
+# the end, so every glance/turn "snaps". :func:`ease_in_out` reshapes the
+# normalized time ``t`` with a smoothstep so velocity is ZERO at both endpoints:
+# the motion accelerates in and decelerates out, gliding instead of snapping.
+# It is a pure function (kept here, in the hardware-free fleet module, so it is
+# unit-testable) that ``GotoQueueMove.evaluate`` applies to its interpolation
+# parameter. Longer default move durations (see :func:`make_goto_applier`)
+# compound the effect.
+
+
+def ease_in_out(t: float) -> float:
+    """Smoothstep easing of a normalized time *t* → eased fraction in ``[0, 1]``.
+
+    Classic Hermite smoothstep ``3t² − 2t³``: monotonic non-decreasing, bounded
+    in ``[0, 1]`` with no overshoot, ``ease(0) == 0`` and ``ease(1) == 1``, and —
+    the point — **zero slope at both endpoints**, so a move eased through this
+    starts and stops gently rather than snapping. Symmetric about the midpoint
+    (``ease(t) + ease(1 − t) == 1``). *t* is clamped to ``[0, 1]`` so out-of-range
+    inputs (e.g. a queue tick slightly past the end) stay bounded.
+    """
+    if t <= 0.0:
+        return 0.0
+    if t >= 1.0:
+        return 1.0
+    return t * t * (3.0 - 2.0 * t)
+
+
+# ---------------------------------------------------------------------------
 # Signal vocabulary + physical mapping (degrees; pure)
 # ---------------------------------------------------------------------------
 
@@ -253,7 +286,7 @@ def make_goto_applier(
     reachy_mini: Any,
     movement_manager: Any,
     *,
-    duration: float = 1.0,
+    duration: float = 1.6,
 ) -> BodyApplier:
     """Build an applier that queues a ``GotoQueueMove`` for a :class:`BodyPose`.
 
@@ -267,6 +300,11 @@ def make_goto_applier(
     the torso; its start is read best-effort for smoothness, falling back to the
     move's neutral default on any read error. ``reachy_mini``/``GotoQueueMove`` are
     imported lazily so importing this module never pulls in the motor stack.
+
+    Smoothness (U8 jerk fix): *duration* defaults to a longer, gentler glide
+    (``1.6``s) and :class:`GotoQueueMove` eases its interpolation with
+    :func:`ease_in_out` (zero velocity at both endpoints), so a turn accelerates
+    in and decelerates out instead of snapping.
     """
     # Last *commanded* body_yaw + antennas in radians; the interpolation start for
     # the next move (so a +40°→-40° turn sweeps through, not via a jump to 0°).

@@ -53,7 +53,13 @@ from reachy_fleet_supervisor.fleet import (
 # ---------------------------------------------------------------------------
 
 
-def _bg(short_id: str, name: str, state: str = "working") -> AgentInfo:
+def _bg(
+    short_id: str,
+    name: str,
+    state: str = "working",
+    *,
+    waiting_for: str | None = None,
+) -> AgentInfo:
     return AgentInfo.from_dict(
         {
             "id": short_id,
@@ -63,6 +69,7 @@ def _bg(short_id: str, name: str, state: str = "working") -> AgentInfo:
             "cwd": "/proj",
             "state": state,
             "status": state,
+            "waitingFor": waiting_for,
         }
     )
 
@@ -79,6 +86,7 @@ def _ms(
     gate: str | None = None,
     summary: str | None = None,
     gate_trigger: str | None = None,
+    waiting_for: str | None = None,
 ) -> ManagerSnapshot:
     report = None
     if report_state is not None:
@@ -86,7 +94,9 @@ def _ms(
         report = ManagerStatus(
             state=report_state, name=name, gate=gate, summary=summary, extra=extra
         )
-    return ManagerSnapshot.from_agent_info(_bg(name[:8], name, state), report=report)
+    return ManagerSnapshot.from_agent_info(
+        _bg(name[:8], name, state, waiting_for=waiting_for), report=report
+    )
 
 
 def _fleet(*managers: ManagerSnapshot) -> FleetSnapshot:
@@ -137,6 +147,54 @@ def test_gated_mode_speaks_every_gate() -> None:
     policy = GatePolicy(mode="gated")
     m = _ms("a", report_state=SENTINEL_HUMAN_GATE, gate_trigger="anything")
     assert speakable_kind(m, policy=policy) == VOICE_GATE
+
+
+# --- the missed-escalation fix: a manager waiting on the human via the roster ---
+# (blocked / waitingFor) with NO emitted HUMAN_GATE sentinel must still speak.
+
+
+def test_speakable_kind_roster_blocked_speaks_as_gate() -> None:
+    # No report at all — just a roster row that went `blocked` (e.g. Claude asked
+    # a clarifying question and parked). Previously silent; now a spoken gate.
+    assert speakable_kind(_ms("a", state="blocked")) == VOICE_GATE
+
+
+def test_speakable_kind_roster_waiting_for_speaks_as_gate() -> None:
+    # `state` may stay working-ish but `waitingFor` is set → still waiting on us.
+    m = _ms("a", state="working", waiting_for="permission prompt")
+    assert speakable_kind(m) == VOICE_GATE
+
+
+def test_roster_gate_ignores_autonomous_policy() -> None:
+    # A bare block/wait has no gate *trigger* to classify, so even a restrictive
+    # autonomous policy speaks it — the agent can't progress without a human.
+    policy = GatePolicy(mode="autonomous", escalate_on=["publish"])
+    assert speakable_kind(_ms("a", state="blocked"), policy=policy) == VOICE_GATE
+
+
+def test_roster_gate_phrase_uses_waiting_for_detail() -> None:
+    m = _ms("builder", state="blocked", waiting_for="which port should it bind?")
+    phrase = voice_phrase_for(VOICE_GATE, m)
+    assert "builder" in phrase
+    assert "which port should it bind?" in phrase
+
+
+def test_completed_report_wins_over_blocked_roster() -> None:
+    # A terminal COMPLETE report is spoken as completion even if the exited bg
+    # roster row still reads oddly — completion is checked before the roster gate.
+    m = _ms("a", state="blocked", report_state=SENTINEL_COMPLETE)
+    assert speakable_kind(m) == VOICE_COMPLETED
+
+
+def test_renderer_speaks_on_transition_to_blocked_roster_gate() -> None:
+    # End-to-end through the edge-triggered renderer: a manager that goes from
+    # working → blocked (waiting on the human) is spoken exactly once.
+    spoken: list[str] = []
+    r = FleetVoiceRenderer(speak=spoken.append)
+    r.on_snapshot(_fleet(_ms("builder", state="working")))  # prime, silent
+    r.on_snapshot(_fleet(_ms("builder", state="blocked", waiting_for="need input")))
+    assert len(spoken) == 1
+    assert "builder" in spoken[0]
 
 
 # ---------------------------------------------------------------------------

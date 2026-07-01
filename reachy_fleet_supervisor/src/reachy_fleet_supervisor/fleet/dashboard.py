@@ -164,7 +164,7 @@ def render_page(
     h1 {{ font-size: 1.2rem; margin: 0 0 .75rem; }}
     .muted {{ color: #888; font-size: .8rem; }}
     #grid {{ display: grid; gap: 1rem;
-             grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }}
+             grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); }}
     .card {{ border: 1px solid #8884; border-left: 4px solid var(--agent, #8884);
              border-radius: 10px; padding: .75rem; }}
     .card.attention {{ border-color: #e0a400; border-left-color: var(--agent, #e0a400);
@@ -184,7 +184,8 @@ def render_page(
     .tool {{ font-size: .75rem; color: #888; }}
     .waiting {{ font-size: .8rem; color: #e0a400; }}
     .headline {{ margin: .4rem 0; }}
-    .transcript pre {{ max-height: 12rem; overflow: auto; font-size: .72rem;
+    .transcript pre {{ max-height: 24rem; overflow: auto; font-size: .72rem;
+                       white-space: pre-wrap; word-break: break-word;
                        background: #8881; padding: .4rem; border-radius: 6px; }}
     .controls {{ margin-top: .5rem; border-top: 1px dashed #8884; padding-top: .5rem; }}
     .controls .msg {{ width: 100%; box-sizing: border-box; font-size: .78rem;

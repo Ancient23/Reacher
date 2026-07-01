@@ -38,6 +38,7 @@ from reachy_fleet_supervisor.fleet import (
     make_goto_applier,
     signal_state,
     slot_yaw,
+    ease_in_out,
 )
 
 
@@ -467,3 +468,50 @@ def test_hold_pose_zero_seconds_still_marks_once() -> None:
     hold_pose(mm, 0.0, tick=0.2, sleep=mm.sleep, monotonic=mm.now)
     assert mm.marks == [0.2], "a zero hold should still refresh the pose once"
     assert mm.t == 0.0
+
+
+# ---------------------------------------------------------------------------
+# ease_in_out — motion smoothing (U8 jerk fix; pure, hardware-free)
+# ---------------------------------------------------------------------------
+
+
+def test_ease_endpoints_are_exact() -> None:
+    assert ease_in_out(0.0) == 0.0
+    assert ease_in_out(1.0) == 1.0
+
+
+def test_ease_clamps_out_of_range() -> None:
+    assert ease_in_out(-0.5) == 0.0
+    assert ease_in_out(1.5) == 1.0
+
+
+def test_ease_is_monotonic_and_bounded_no_overshoot() -> None:
+    prev = -1.0
+    for i in range(0, 101):
+        t = i / 100.0
+        v = ease_in_out(t)
+        assert 0.0 <= v <= 1.0, f"overshoot at t={t}: {v}"  # bounded, no overshoot
+        assert v >= prev, f"not monotonic at t={t}"          # non-decreasing
+        prev = v
+
+
+def test_ease_reaches_target_at_end() -> None:
+    # Eased interpolation from a→b must still land exactly on b at t=1.
+    a, b = -0.7, 0.7
+    val = a + (b - a) * ease_in_out(1.0)
+    assert val == b
+
+
+def test_ease_is_symmetric_about_midpoint() -> None:
+    # smoothstep symmetry: ease(t) + ease(1-t) == 1.
+    for t in (0.1, 0.25, 0.5, 0.75, 0.9):
+        assert math.isclose(ease_in_out(t) + ease_in_out(1.0 - t), 1.0, abs_tol=1e-12)
+
+
+def test_ease_gentle_endpoints_softens_start_and_stop() -> None:
+    # The whole point: near the endpoints the eased motion moves LESS than a
+    # linear ramp would (zero velocity at the ends → no snap). Near the middle it
+    # moves faster to compensate.
+    assert ease_in_out(0.1) < 0.1   # slow start
+    assert ease_in_out(0.9) > 0.9   # slow stop (already most of the way)
+    assert math.isclose(ease_in_out(0.5), 0.5, abs_tol=1e-12)  # midpoint unchanged

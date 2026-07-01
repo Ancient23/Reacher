@@ -115,13 +115,28 @@ class GotoQueueMove(Move):  # type: ignore
         return self._duration
 
     def evaluate(self, t: float) -> tuple[NDArray[np.float64] | None, NDArray[np.float64] | None, float | None]:
-        """Evaluate goto move at time t using linear interpolation."""
+        """Evaluate goto move at time t using eased interpolation.
+
+        The interpolation parameter is passed through an ease-in/out smoothstep
+        (:func:`reachy_fleet_supervisor.fleet.body.ease_in_out`) so the motion has
+        zero velocity at both endpoints and glides rather than snapping (the U8
+        jerk fix). If that pure helper can't be imported the move falls back to
+        plain linear interpolation, so the motor module stays self-contained.
+        """
         try:
             from reachy_mini.utils import create_head_pose
             from reachy_mini.utils.interpolation import linear_pose_interpolation
 
             # Clamp t to [0, 1] for interpolation
             t_clamped = max(0, min(1, t / self.duration))
+            # Ease the (already clamped) parameter so start/stop are gentle. Pure,
+            # hardware-free, unit-tested in fleet.body; degrade to linear if absent.
+            try:
+                from reachy_fleet_supervisor.fleet.body import ease_in_out
+
+                t_clamped = ease_in_out(t_clamped)
+            except Exception:  # noqa: BLE001 — easing is a smoothness nicety, never required
+                pass
 
             # Use start pose if available, otherwise neutral
             if self.start_head_pose is not None:

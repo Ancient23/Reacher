@@ -54,6 +54,7 @@ from .body import (
     choose_target,
     body_signal_for,
     make_goto_applier,
+    ease_in_out,
 )
 from .state import (
     ATTENTION_STATES,
@@ -292,6 +293,7 @@ __all__ = [
     "antenna_pose",
     "slot_yaw",
     "make_goto_applier",
+    "ease_in_out",
     "ANTENNA_POSES",
     "ANTENNA_MAX_DEG",
     "BODY_YAW_SPAN_DEG",

@@ -114,6 +114,17 @@ def speakable_kind(
         return None
     if state == SENTINEL_COMPLETE or raw_state in ("done", "complete", "completed"):
         return VOICE_COMPLETED
+    # Generic roster-level gate (the missed-escalation fix): the manager is
+    # genuinely WAITING ON THE HUMAN per the ``claude agents --json`` roster row —
+    # ``state`` is ``blocked``/``waiting`` or ``waitingFor`` is set — but it never
+    # emitted a HUMAN_GATE sentinel (e.g. Claude asked an interactive clarifying
+    # question and is now parked). :meth:`ManagerSnapshot.needs_attention` and the
+    # body renderer already treat that as attention; the voice must too, or a
+    # manager that quietly blocks on a question is never spoken. There is no gate
+    # *trigger* to classify here, so a bare block/wait always escalates — the agent
+    # cannot make progress without a human either way.
+    if raw_state in ("blocked", "waiting") or bool((m.waiting_for or "").strip()):
+        return VOICE_GATE
     return None
 
 
@@ -124,9 +135,13 @@ def _gate_detail(m: ManagerSnapshot) -> Optional[str]:
     trimmed to a single short clause so the spoken line stays brief.
     """
     report = m.report
-    if report is None:
-        return None
-    for candidate in (report.gate, report.summary):
+    candidates: list[Optional[str]] = []
+    if report is not None:
+        candidates.extend((report.gate, report.summary))
+    # A roster-only gate (blocked/waiting with no emitted report) still has a
+    # reason: the ``waitingFor`` prompt (e.g. "permission prompt", a question).
+    candidates.append(m.waiting_for)
+    for candidate in candidates:
         if candidate and candidate.strip():
             # Keep it to the first line; gate steps can be multi-line copy-paste.
             first = candidate.strip().splitlines()[0].strip()
