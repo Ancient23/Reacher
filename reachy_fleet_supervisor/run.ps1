@@ -1,7 +1,7 @@
-# run.ps1 — self-healing launcher for the Reachy Fleet Supervisor
+# run.ps1 - self-healing launcher for the Reachy Fleet Supervisor
 #
 # Starts the Reachy Mini daemon + the app, and AUTOMATICALLY RESTARTS BOTH if either
-# dies — so a mid-session daemon drop ("Lost connection with the server") recovers on its
+# dies - so a mid-session daemon drop ("Lost connection with the server") recovers on its
 # own (the daemon re-wakes the robot to neutral). Press Ctrl+C to quit.
 #
 # Usage (from the app directory, in your own terminal):
@@ -23,7 +23,7 @@ $env:PYTHONUTF8 = "1"
 $env:PYTHONPATH = $Src
 if (-not $env:OPENAI_API_KEY) { $env:OPENAI_API_KEY = [Environment]::GetEnvironmentVariable("OPENAI_API_KEY", "User") }
 if (-not $env:OPENAI_API_KEY) {
-  Write-Warning 'OPENAI_API_KEY is not set — the Realtime voice will fail. Run: setx OPENAI_API_KEY "sk-..."'
+  Write-Warning 'OPENAI_API_KEY is not set - the Realtime voice will fail. Run: setx OPENAI_API_KEY "sk-..."'
 }
 
 $script:DaemonProc = $null
@@ -47,7 +47,7 @@ try {
     $now = Get-Date
     $recent.Enqueue($now)
     while ($recent.Count -gt 0 -and ($now - $recent.Peek()) -gt [TimeSpan]::FromSeconds(60)) { [void]$recent.Dequeue() }
-    if ($recent.Count -gt 4) { Write-Warning "$(& $ts) Restarting too often — pausing 30s."; Start-Sleep 30; $recent.Clear() }
+    if ($recent.Count -gt 4) { Write-Warning "$(& $ts) Restarting too often - pausing 30s."; Start-Sleep 30; $recent.Clear() }
 
     # free port 8000 + any stale daemon, let COM3 release
     Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue |
@@ -65,7 +65,7 @@ try {
       -RedirectStandardError  (Join-Path $LogDir "daemon.err.log") `
       -WindowStyle Hidden -PassThru
 
-    # wait until the daemon's MOTOR BACKEND is ready — not just the HTTP server.
+    # wait until the daemon's MOTOR BACKEND is ready - not just the HTTP server.
     # /api/daemon/status returns 200 even with dead motors; require state != "error"
     # and an empty error field (otherwise the app would hit /ws/sdk -> 403 and exit).
     $ready = $false; $daemonErr = $null
@@ -88,7 +88,7 @@ try {
     }
     Start-Sleep -Seconds 2
 
-    Write-Host "$(& $ts) Daemon ready. Launching Reachy — talk to it!  (Ctrl+C to quit)"
+    Write-Host "$(& $ts) Daemon ready. Launching Reachy - talk to it!  (Ctrl+C to quit)"
     $script:AppProc = Start-Process -FilePath $Py -ArgumentList @("-m", "reachy_fleet_supervisor.main") `
       -WorkingDirectory $Src `
       -RedirectStandardOutput (Join-Path $LogDir "app.out.log") `
@@ -98,8 +98,8 @@ try {
     # Watchdog: if EITHER the daemon or the app dies, restart both.
     while ($true) {
       Start-Sleep -Seconds 2
-      if ($script:DaemonProc.HasExited) { Write-Warning "$(& $ts) Daemon exited — restarting daemon + app."; break }
-      if ($script:AppProc.HasExited)    { Write-Warning "$(& $ts) App exited — restarting daemon + app.";    break }
+      if ($script:DaemonProc.HasExited) { Write-Warning "$(& $ts) Daemon exited - restarting daemon + app."; break }
+      if ($script:AppProc.HasExited)    { Write-Warning "$(& $ts) App exited - restarting daemon + app.";    break }
     }
     Stop-All
     Start-Sleep -Seconds 2
