@@ -150,6 +150,48 @@ def _gate_detail(m: ManagerSnapshot) -> Optional[str]:
     return None
 
 
+# Gate reason categories (Problem-4 fix, human feedback 2026-07-01). Reachy
+# intermittently said a gated manager was "waiting on an ACTION" when it was really
+# waiting on a QUESTION (needs an answer) — because the escalation fired on the
+# blocked transition BEFORE ``waitingFor`` was populated, so the phrase fell back
+# to a generic/wrong category; a later poll had the real question and phrased it
+# right. The fix: only claim a category once the reason text actually supports it,
+# and never mislabel a question as an action (or vice-versa).
+GATE_QUESTION = "question"  # Reachy needs an ANSWER (a clarifying question)
+GATE_APPROVAL = "approval"  # Reachy needs the human to APPROVE/permit something
+GATE_GENERIC = "generic"  # reason unknown yet, or neither bucket → phrase neutrally
+
+# Substrings that mark a waiting reason as a QUESTION vs an APPROVAL/permission ask.
+_QUESTION_MARKERS = (
+    "?", "which", "what", "how ", "should ", "clarif", "question", "prefer",
+    "would you", "do you", "does ", "answer",
+)
+_APPROVAL_MARKERS = (
+    "approv", "permission", "permit", "allow", "confirm", "authoriz", "proceed",
+    "sign off", "sign-off", "grant", "ok to", "okay to",
+)
+
+
+def gate_reason_category(detail: Optional[str]) -> str:
+    """Classify a gate/waiting *detail* → :data:`GATE_QUESTION` / :data:`GATE_APPROVAL` / :data:`GATE_GENERIC`.
+
+    :data:`GATE_GENERIC` covers BOTH "no reason known yet" (the pre-reason
+    transition — we must NOT guess a category then) and a reason matching neither
+    bucket. Only a reason that actually reads like a question yields
+    :data:`GATE_QUESTION` (so Reachy says it needs an *answer*), and only an
+    approval/permission ask yields :data:`GATE_APPROVAL` — the misleading generic
+    "waiting on an action" phrase is never emitted for a question.
+    """
+    text = (detail or "").strip().lower()
+    if not text:
+        return GATE_GENERIC
+    if any(marker in text for marker in _QUESTION_MARKERS):
+        return GATE_QUESTION
+    if any(marker in text for marker in _APPROVAL_MARKERS):
+        return GATE_APPROVAL
+    return GATE_GENERIC
+
+
 def voice_phrase_for(kind: VoiceKind, m: ManagerSnapshot) -> str:
     """Render a short spoken line for a speakable *kind* on manager *m* (pure).
 
@@ -157,13 +199,25 @@ def voice_phrase_for(kind: VoiceKind, m: ManagerSnapshot) -> str:
     immediately knows *who*: e.g. ``"tester failed the build and needs you."`` or
     ``"tester finished its task."`` A reason clause (from the gate/summary) is
     appended when the manager provided one.
+
+    For a **gate** the wording matches the reason CATEGORY
+    (:func:`gate_reason_category`): a question → "needs your answer", an approval
+    ask → "needs your approval", and — critically — an as-yet-unknown reason →
+    the neutral "needs you" (no wrong-category claim), upgraded on a later poll
+    once the reason text arrives.
     """
     label = _label(m)
     detail = _gate_detail(m)
     if kind == VOICE_FAILED:
         base = f"Heads up — {label} failed and needs you"
     elif kind == VOICE_GATE:
-        base = f"{label} needs you"
+        category = gate_reason_category(detail)
+        if category == GATE_QUESTION:
+            base = f"{label} needs your answer"
+        elif category == GATE_APPROVAL:
+            base = f"{label} needs your approval"
+        else:  # unknown reason yet → neutral, never a mislabelled category
+            base = f"{label} needs you"
     elif kind == VOICE_COMPLETED:
         base = f"{label} finished its task"
     else:  # pragma: no cover - defensive; callers pass a real kind
@@ -222,7 +276,19 @@ class FleetVoiceRenderer:
         self._policy = policy or GatePolicy()
         self._announce_initial = announce_initial
         self._last_kinds: dict[str, Optional[VoiceKind]] = {}
+        # Change-detection signatures. For a gate the signature folds in the reason
+        # CATEGORY, so a gate first announced neutrally ("needs you", reason not yet
+        # known) RE-fires once the reason lands and it can be phrased correctly
+        # ("needs your answer: …") — without re-announcing on every poll.
+        self._last_sigs: dict[str, str] = {}
         self._primed = False
+
+    @staticmethod
+    def _signature(m: ManagerSnapshot, kind: Optional[VoiceKind]) -> str:
+        """Edge-trigger signature: a gate also keys on its reason category."""
+        if kind == VOICE_GATE:
+            return f"gate:{gate_reason_category(_gate_detail(m))}"
+        return kind or ""
 
     @property
     def last_kinds(self) -> dict[str, Optional[VoiceKind]]:
@@ -239,15 +305,19 @@ class FleetVoiceRenderer:
         speak_baseline = self._primed or self._announce_initial
         announcements: list[VoiceAnnouncement] = []
         seen: dict[str, Optional[VoiceKind]] = {}
+        seen_sigs: dict[str, str] = {}
         for m in snapshot.managers:
             kind = speakable_kind(m, policy=self._policy)
+            sig = self._signature(m, kind)
             seen[m.key] = kind
-            previous = self._last_kinds.get(m.key)
-            if kind is not None and kind != previous and speak_baseline:
+            seen_sigs[m.key] = sig
+            previous = self._last_sigs.get(m.key)
+            if kind is not None and sig != previous and speak_baseline:
                 announcements.append(
                     VoiceAnnouncement(m.key, kind, voice_phrase_for(kind, m))
                 )
         self._last_kinds = seen
+        self._last_sigs = seen_sigs
         self._primed = True
         return announcements
 

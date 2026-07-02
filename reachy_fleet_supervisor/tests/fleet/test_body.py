@@ -126,6 +126,46 @@ def test_failed_is_the_only_downward_droop() -> None:
     assert failed[0] <= -antenna_pose(SIGNAL_DONE)[0], "failed droop should be clearly visible"
 
 
+# ---------------------------------------------------------------------------
+# subtle-motion budget (human feedback 2026-07-01: robot moved too much / too big)
+# ---------------------------------------------------------------------------
+
+
+def test_body_yaw_span_is_small_and_subtle() -> None:
+    # The torso sweep must be a subtle glance, not a wide swing: kept well under
+    # the old ±40°, in the small ±15-20° band the human asked for.
+    assert 10.0 <= BODY_YAW_SPAN_DEG <= 20.0
+    # Every slot angle for up to 4 managers stays inside that small band.
+    for count in range(1, 5):
+        for i in range(count):
+            assert abs(slot_yaw(i, count)) <= BODY_YAW_SPAN_DEG
+
+
+def test_antenna_signal_poses_stay_within_small_budget() -> None:
+    from reachy_fleet_supervisor.fleet.body import (
+        ANTENNA_POSES,
+        ANTENNA_SIGNAL_MAX_DEG,
+    )
+
+    # No signalling antenna pose may exceed the subtle-motion budget (was 45°).
+    assert ANTENNA_SIGNAL_MAX_DEG <= 25.0
+    for sig, (left, right) in ANTENNA_POSES.items():
+        assert abs(left) <= ANTENNA_SIGNAL_MAX_DEG, sig
+        assert abs(right) <= ANTENNA_SIGNAL_MAX_DEG, sig
+
+
+def test_idle_breathing_amplitude_is_gentle() -> None:
+    # Idle breathing is the motion the human specifically flagged as too big; the
+    # named amplitudes must be small (antenna sway well under the old 15°).
+    from reachy_fleet_supervisor.moves import (
+        BREATHING_ANTENNA_SWAY_DEG,
+        BREATHING_Z_AMPLITUDE_M,
+    )
+
+    assert 0.0 < BREATHING_ANTENNA_SWAY_DEG <= 6.0
+    assert 0.0 < BREATHING_Z_AMPLITUDE_M <= 0.003  # <= 3mm vertical
+
+
 def test_antenna_pose_unknown_signal_falls_back_to_idle() -> None:
     assert antenna_pose("???") == (0.0, 0.0)
 

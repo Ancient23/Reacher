@@ -92,25 +92,35 @@ SIGNAL_DONE = "done"
 SIGNAL_FAILED = "failed"
 
 # Half-range of the torso sweep, in degrees. Managers are spread symmetrically
-# across [-SPAN, +SPAN]; kept modest so the Lite's body_yaw stays well in range.
-BODY_YAW_SPAN_DEG = 40.0
+# across [-SPAN, +SPAN]. Deliberately SMALL (human feedback 2026-07-01: the robot
+# moved too much / too big): a subtle glance toward the manager needing attention,
+# not a wide sweep. Kept well inside the Lite's body_yaw range. Named so it is easy
+# to tune; ``test_body`` asserts it stays in the small-motion band.
+BODY_YAW_SPAN_DEG = 18.0
 
 # Antenna pose per signal, as (left, right) degrees. Both antennas share a sign so
 # they move together (same-sign = same visual direction; opposite signs would just
 # wiggle — cf. the breathing "sway" of [a, -a]). Every non-failed state perks the
 # antennas UP (>= 0); only ``failed`` drives them clearly DOWN, so a failure is the
-# one unmistakable droop. ``failed`` mirrors ``attention`` in magnitude (-45 vs +45)
-# = "fully down" vs "fully up", the most tellable-apart pair.
+# one unmistakable droop. Magnitudes were cut substantially (human feedback
+# 2026-07-01: motion too big) — the ordering that carries meaning is preserved
+# (attention perks highest, ``failed`` mirrors it downward), just gentler:
+# ``failed`` mirrors ``attention`` (-20 vs +20) = "fully down" vs "fully up".
 ANTENNA_POSES: dict[str, tuple[float, float]] = {
     SIGNAL_IDLE: (0.0, 0.0),
-    SIGNAL_WORKING: (15.0, 15.0),
-    SIGNAL_ATTENTION: (45.0, 45.0),
-    SIGNAL_DONE: (30.0, 30.0),
-    SIGNAL_FAILED: (-45.0, -45.0),
+    SIGNAL_WORKING: (7.0, 7.0),
+    SIGNAL_ATTENTION: (20.0, 20.0),
+    SIGNAL_DONE: (13.0, 13.0),
+    SIGNAL_FAILED: (-20.0, -20.0),
 }
 
-# Defensive clamp so a bad config can never command the antennas past this.
-ANTENNA_MAX_DEG = 60.0
+# Defensive clamp so a bad config can never command the antennas past this. Also
+# cut down (was 60°) now that the signalling poses are small/subtle.
+ANTENNA_MAX_DEG = 30.0
+
+# Upper bound (deg) on any single signalling antenna magnitude — the subtle-motion
+# budget the tests assert the poses stay within (human feedback: keep it small).
+ANTENNA_SIGNAL_MAX_DEG = 22.0
 
 
 def antenna_pose(signal: str) -> tuple[float, float]:

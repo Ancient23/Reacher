@@ -9,7 +9,13 @@ import pytest
 
 import reachy_fleet_supervisor.openai_realtime as rt_mod
 import reachy_fleet_supervisor.tools.background_tool_manager as btm_mod
-from reachy_fleet_supervisor.openai_realtime import OpenaiRealtimeHandler, _compute_response_cost
+from reachy_fleet_supervisor.openai_realtime import (
+    OpenaiRealtimeHandler,
+    _compute_response_cost,
+    build_turn_detection,
+    TURN_SILENCE_DURATION_MS,
+    TURN_PREFIX_PADDING_MS,
+)
 from reachy_fleet_supervisor.tools.core_tools import ToolDependencies
 from reachy_fleet_supervisor.tools.background_tool_manager import ToolCallRoutine
 
@@ -18,6 +24,27 @@ def _build_handler(loop: asyncio.AbstractEventLoop) -> OpenaiRealtimeHandler:
     asyncio.set_event_loop(loop)
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
     return OpenaiRealtimeHandler(deps)
+
+
+def test_turn_detection_waits_longer_before_acting() -> None:
+    """Human feedback 2026-07-01: Reachy cut people off. The turn-detection config
+    must wait NOTICEABLY longer (~1s of silence) before ending the user's turn, and
+    keep extra prefix padding so a slow start isn't clipped."""
+    td = build_turn_detection()
+    assert td["type"] == "server_vad"
+    # The whole point: a long trailing-silence threshold, far above the ~200ms default.
+    assert td["silence_duration_ms"] == TURN_SILENCE_DURATION_MS
+    assert td["silence_duration_ms"] >= 800
+    assert td["prefix_padding_ms"] == TURN_PREFIX_PADDING_MS
+    assert td["prefix_padding_ms"] >= 300
+    # The human can still barge in.
+    assert td["interrupt_response"] is True
+
+
+def test_turn_detection_is_tunable() -> None:
+    td = build_turn_detection(silence_duration_ms=1500, prefix_padding_ms=500)
+    assert td["silence_duration_ms"] == 1500
+    assert td["prefix_padding_ms"] == 500
 
 
 def test_format_timestamp_uses_wall_clock() -> None:

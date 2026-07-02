@@ -214,6 +214,67 @@ def test_phrase_completed_mentions_finished() -> None:
     assert "finished" in phrase.lower()
 
 
+# --- Problem 4 (2026-07-01): question vs action gate phrasing, no wrong category --
+
+
+def test_gate_question_phrased_as_needs_answer_not_action() -> None:
+    # A blocked manager waiting on a QUESTION must be phrased as needing an ANSWER,
+    # never mislabelled as "waiting on an action".
+    m = _ms("builder", state="blocked", waiting_for="which port should it bind?")
+    phrase = voice_phrase_for(VOICE_GATE, m).lower()
+    assert "answer" in phrase
+    assert "which port should it bind?" in phrase
+    assert "action" not in phrase and "approval" not in phrase
+
+
+def test_gate_approval_phrased_as_needs_approval() -> None:
+    m = _ms("deployer", state="blocked", waiting_for="approve the production deploy")
+    phrase = voice_phrase_for(VOICE_GATE, m).lower()
+    assert "approval" in phrase
+
+
+def test_gate_with_no_reason_yet_is_neutral_not_wrong_category() -> None:
+    # The pre-reason transition: reason unknown → neutral "needs you", NEVER a
+    # category claim (this was the intermittent wrong "waiting on an action").
+    m = _ms("builder", state="blocked")  # no waiting_for / gate yet
+    phrase = voice_phrase_for(VOICE_GATE, m).lower()
+    assert "needs you" in phrase
+    assert "action" not in phrase
+    assert "approval" not in phrase
+    assert "answer" not in phrase
+
+
+def test_gate_reason_category_classifies() -> None:
+    from reachy_fleet_supervisor.fleet.voice import (
+        gate_reason_category,
+        GATE_QUESTION,
+        GATE_APPROVAL,
+        GATE_GENERIC,
+    )
+
+    assert gate_reason_category("which port?") == GATE_QUESTION
+    assert gate_reason_category("please approve the deploy") == GATE_APPROVAL
+    assert gate_reason_category(None) == GATE_GENERIC
+    assert gate_reason_category("working on it") == GATE_GENERIC
+
+
+def test_neutral_gate_upgrades_to_question_when_reason_arrives() -> None:
+    # End-to-end: a gate announced neutrally before the reason is known must
+    # RE-announce with the correct question phrasing once waitingFor lands — and
+    # the neutral first line must not carry a wrong category.
+    spoken: list[str] = []
+    r = FleetVoiceRenderer(speak=spoken.append)
+    r.on_snapshot(_fleet(_ms("builder", state="working")))  # prime, silent
+    r.on_snapshot(_fleet(_ms("builder", state="blocked")))  # gate, reason unknown
+    r.on_snapshot(  # reason now known → question
+        _fleet(_ms("builder", state="blocked", waiting_for="which port should it bind?"))
+    )
+    assert len(spoken) == 2
+    assert "action" not in spoken[0].lower()  # neutral, no wrong category
+    assert "answer" in spoken[1].lower()
+    assert "which port should it bind?" in spoken[1].lower()
+
+
 def test_phrase_gate_folds_in_gate_text_first_line() -> None:
     m = _ms(
         "tester",

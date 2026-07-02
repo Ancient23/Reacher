@@ -213,11 +213,32 @@ def test_gated_manager_still_rendered_as_card() -> None:
     assert "card attention" in cards  # the gated one is flagged, not vanished
 
 
-def test_grid_cards_are_wide_enough() -> None:
-    """Regression (too-narrow cards): the grid columns request a comfortably wide
-    minimum so cards are readable, not squeezed into a narrow strip."""
+def test_grid_cards_are_wide_full_width() -> None:
+    """Regression (cards rendered narrow, human feedback 2026-07-01): the grid is a
+    SINGLE full-width column by default (each card uses the whole viewport), and the
+    old auto-fill packing of ~400px columns is gone. We inspect the ACTUAL emitted
+    CSS/markup the app serves, not a guess."""
     page = render_page(FleetState().snapshot, title="t", poll_ms=2000)
-    assert "minmax(min(100%, 400px), 1fr)" in page
+    # Single full-width column by default — cards span the viewport width.
+    assert "grid-template-columns: minmax(0, 1fr)" in page
+    # The narrow auto-fill packing that squeezed cards must be gone.
+    assert "auto-fill" not in page
+    assert "minmax(min(100%, 400px), 1fr)" not in page
+    # A second column is only allowed on very wide screens, and even then each
+    # card is at least 640px (never the old narrow ~400px).
+    assert "repeat(2, minmax(640px, 1fr))" in page
+    # No container max-width squeezing the grid.
+    assert "max-width: none" in page
+
+
+def test_grid_full_width_renders_with_managers() -> None:
+    """The wide layout is present on the real served page (with cards), and the
+    transcript uses the width (wrapping, not clipped)."""
+    client = TestClient(create_dashboard_app(_state_with(_agent("aaa111", "alice"))))
+    html = client.get("/").text
+    assert "grid-template-columns: minmax(0, 1fr)" in html
+    assert 'class="card' in html
+    assert "word-break: break-word" in html
 
 
 def test_healthz() -> None:

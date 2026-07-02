@@ -160,11 +160,21 @@ def render_page(
   <title>{_esc(title)}</title>
   <style>
     :root {{ color-scheme: light dark; }}
-    body {{ font-family: system-ui, sans-serif; margin: 0; padding: 1rem; }}
+    /* Full-bleed body: no max-width container squeezing the cards (human
+       feedback 2026-07-01: cards must be WIDE). */
+    body {{ font-family: system-ui, sans-serif; margin: 0; padding: 1rem;
+            max-width: none; width: auto; }}
     h1 {{ font-size: 1.2rem; margin: 0 0 .75rem; }}
     .muted {{ color: #888; font-size: .8rem; }}
-    #grid {{ display: grid; gap: 1rem;
-             grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); }}
+    /* WIDE cards: a SINGLE full-width column by default so every card uses the
+       whole viewport width (the transcript finally has room). Only on very wide
+       screens (>= 1400px) do we allow a SECOND column, and even then each card is
+       at least 640px — never the narrow ~400px packing that made cards small. */
+    #grid {{ display: grid; gap: 1rem; width: 100%;
+             grid-template-columns: minmax(0, 1fr); }}
+    @media (min-width: 1400px) {{
+      #grid {{ grid-template-columns: repeat(2, minmax(640px, 1fr)); }}
+    }}
     .card {{ border: 1px solid #8884; border-left: 4px solid var(--agent, #8884);
              border-radius: 10px; padding: .75rem; }}
     .card.attention {{ border-color: #e0a400; border-left-color: var(--agent, #e0a400);

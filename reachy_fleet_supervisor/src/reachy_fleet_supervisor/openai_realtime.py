@@ -44,6 +44,38 @@ IMAGE_INPUT_COST_PER_1M = 5.0
 
 _RESPONSE_DONE_TIMEOUT: Final[float] = 30.0
 
+# Turn-detection tuning (human feedback 2026-07-01: Reachy responded before the
+# human finished — it cut people off). server_vad ends the user's turn after this
+# much trailing silence; the OpenAI default (~200ms) is far too eager for a
+# conversational robot, so we wait noticeably longer before acting. These are
+# NAMED + tunable, and :func:`build_turn_detection` is a pure function so the
+# config is unit-testable without a live Realtime connection.
+TURN_SILENCE_DURATION_MS: Final[int] = 1000  # wait ~1s of silence before ending a turn (was ~200)
+TURN_PREFIX_PADDING_MS: Final[int] = 400  # keep more lead-in audio so slow starts aren't clipped
+TURN_VAD_THRESHOLD: Final[float] = 0.5  # speech-detection sensitivity (server_vad default)
+
+
+def build_turn_detection(
+    *,
+    silence_duration_ms: int = TURN_SILENCE_DURATION_MS,
+    prefix_padding_ms: int = TURN_PREFIX_PADDING_MS,
+    threshold: float = TURN_VAD_THRESHOLD,
+) -> dict[str, Any]:
+    """Build the Realtime ``turn_detection`` config (pure; unit-testable).
+
+    Uses ``server_vad`` with a deliberately LONG ``silence_duration_ms`` so Reachy
+    waits for the human to actually finish before responding (the "don't cut me
+    off" fix), plus extra ``prefix_padding_ms`` so a slow start isn't clipped.
+    ``interrupt_response`` stays on so the human can still barge in.
+    """
+    return {
+        "type": "server_vad",
+        "threshold": threshold,
+        "prefix_padding_ms": prefix_padding_ms,
+        "silence_duration_ms": silence_duration_ms,
+        "interrupt_response": True,
+    }
+
 
 def _compute_response_cost(usage: Any) -> float:
     """Compute dollar cost from a response usage object."""
@@ -459,10 +491,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                                     "rate": self.input_sample_rate,
                                 },
                                 "transcription": {"model": "gpt-4o-transcribe", "language": "en"},
-                                "turn_detection": {
-                                    "type": "server_vad",
-                                    "interrupt_response": True,
-                                },
+                                "turn_detection": build_turn_detection(),
                             },
                             "output": {
                                 "format": {

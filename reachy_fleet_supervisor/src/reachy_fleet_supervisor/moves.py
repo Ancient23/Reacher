@@ -57,6 +57,14 @@ logger = logging.getLogger(__name__)
 # Configuration constants
 CONTROL_LOOP_FREQUENCY_HZ = 100.0  # Hz - Target frequency for the movement control loop
 
+# Idle-breathing amplitudes (human feedback 2026-07-01: the robot moved too much,
+# ESPECIALLY when idle — idle breathing should be gentle, not big sweeps). These
+# were formerly hard-coded inside BreathingMove (z=5mm, antenna sway=15°); pulled
+# out as NAMED, tunable constants and cut substantially so idle motion is subtle.
+# Keep them small — the tests assert the antenna sway stays under a low threshold.
+BREATHING_Z_AMPLITUDE_M = 0.002  # 2mm gentle vertical breathing (was 5mm)
+BREATHING_ANTENNA_SWAY_DEG = 4.0  # antenna sway half-amplitude in deg (was 15°)
+
 # Type definitions
 FullBodyPose = Tuple[NDArray[np.float32], Tuple[float, float], float]  # (head_pose_4x4, antennas, body_yaw)
 
@@ -86,10 +94,11 @@ class BreathingMove(Move):  # type: ignore
         self.neutral_head_pose = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)
         self.neutral_antennas = np.array([0.0, 0.0])
 
-        # Breathing parameters
-        self.breathing_z_amplitude = 0.005  # 5mm gentle breathing
+        # Breathing parameters (amplitudes are named module constants so idle
+        # motion is easy to tune; cut small per human feedback — see the constants).
+        self.breathing_z_amplitude = BREATHING_Z_AMPLITUDE_M  # gentle vertical breathing
         self.breathing_frequency = 0.1  # Hz (6 breaths per minute)
-        self.antenna_sway_amplitude = np.deg2rad(15)  # 15 degrees
+        self.antenna_sway_amplitude = np.deg2rad(BREATHING_ANTENNA_SWAY_DEG)  # subtle sway
         self.antenna_frequency = 0.5  # Hz (faster antenna sway)
 
     @property

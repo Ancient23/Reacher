@@ -57,7 +57,30 @@ status:
   # 10 new tests; fleet suite 283 green; 0 stray bg agents.
   #
   # U15 (Phase 3) IN PROGRESS — gate -> voice escalation (decision #17; HARDWARE).
-  # PROBLEM-FIX PASS (human live test 2026-06-30) — fleet suite 319 green (+16):
+  # PROBLEM-FIX PASS #2 (human live test 2026-07-01) — fleet suite 328 green (+9)
+  # + 2 new openai_realtime tests. FOUR problems fixed in this pass:
+  #   (P1) MOTION TOO BIG, esp. idle. Idle breathing amplitudes pulled out of
+  #   moves.BreathingMove into NAMED constants and cut: antenna sway 15°->4°,
+  #   z 5mm->2mm. Body signalling shrunk: BODY_YAW_SPAN_DEG 40°->18°, ANTENNA_POSES
+  #   magnitudes ~halved (attention 45->20, working 15->7, done 30->13,
+  #   failed -45->-20), ANTENNA_MAX 60->30 + new ANTENNA_SIGNAL_MAX_DEG=22 budget.
+  #   Easing/smoothness (prior pass) kept. Tests assert the small yaw band, the
+  #   antenna budget, and the gentle idle amplitude.
+  #   (P2) DASHBOARD CARDS NOT WIDE. #grid was auto-fill minmax(400px) → packed
+  #   narrow. Now a SINGLE full-width column by default (minmax(0,1fr)); a 2nd
+  #   column only >=1400px and >=640px each; body max-width:none. Verified by
+  #   rendering the served HTML + asserting the emitted CSS (auto-fill/400px gone).
+  #   (P3) REACHY CUT PEOPLE OFF. turn_detection refactored into pure
+  #   build_turn_detection() (server_vad) with NAMED constants:
+  #   silence_duration_ms ~200->1000, prefix_padding_ms->400; unit-tested.
+  #   (P4) WRONG GATE-REASON PHRASING (intermittent "waiting on an action" for a
+  #   question). voice.gate_reason_category() classifies the waitingFor/gate reason
+  #   (question|approval|generic); voice_phrase_for says "needs your answer" for a
+  #   question, "needs your approval" for an approval ask, neutral "needs you" when
+  #   the reason isn't known YET (never a wrong category). The renderer's
+  #   edge-trigger signature folds in the category so a gate first spoken neutrally
+  #   RE-announces with the question once waitingFor lands. Tested end-to-end.
+  # (superseded) PROBLEM-FIX PASS #1 (human live test 2026-06-30) — +16 tests:
   #   (1) MISSED VOICE GATE root cause: speakable_kind only spoke a gate off the
   #   emitted HUMAN_GATE sentinel; a manager that merely BLOCKS waiting on the human
   #   (roster state=blocked / waitingFor set, no sentinel — e.g. Claude asked a
@@ -95,19 +118,22 @@ status:
   # -p, U12/decision #16) + persona instructions. HARDWARE gate: audio/voice
   # needs the physical robot, so the spoken path is human-verified (pending_gate).
   pending_gate: |
-    U15 gate -> voice escalation (RE-RAISED after human test feedback 2026-06-30).
+    U15 gate -> voice escalation (RE-RAISED after human test feedback 2026-07-01).
     Audio/voice + robot motion cannot be self-verified; please re-test on the robot.
 
-    WHAT WAS FIXED since the last gate (all software-tested, fleet suite 319 green):
-    - MISSED VOICE GATE: a manager that just BLOCKS waiting on the human (roster
-      state=blocked / waitingFor set, e.g. Claude asked a clarifying question) with
-      NO HUMAN_GATE sentinel was silent. Voice now speaks that generic blocked/waiting
-      state too (verified end-to-end through the real poller->state->voice chain).
-    - DISAPPEARING CARD + missed gate shared root cause: a manager that emits its
-      gate/completion and then EXITS dropped out of the roster (poller now polls
-      `--all`), so its card stays AND its terminal state is still spoken.
-    - MOTION now eased (smoothstep ease-in/out + longer 1.6s glide) so turns are
-      SMOOTH, not jerky. run.ps1 launches clean.
+    WHAT WAS FIXED since the last gate (all software-tested; fleet suite 328 green
+    + 2 new realtime tests):
+    - MOTION TOO BIG (esp. idle): idle breathing is now GENTLE (antenna sway 15°->4°,
+      vertical 5mm->2mm) and gestures are SUBTLE (head-yaw range ±40°->±18°, antenna
+      poses roughly halved). Amplitudes are named constants; motion stays smooth
+      (easing kept) — this cut MAGNITUDE, not smoothness.
+    - DASHBOARD CARDS NOW WIDE: a single full-width column (cards span the viewport;
+      transcript finally has room), 2 columns only on very wide (>=1400px) screens.
+      Stay-open-across-polls + card retention (poll --all) preserved.
+    - REACHY WAITS LONGER before responding: turn-detection silence threshold raised
+      ~200ms -> ~1000ms (+ more prefix padding) so it doesn't cut you off mid-sentence.
+    - GATE PHRASING: Reachy now says it needs an ANSWER for a question (vs approval /
+      neutral "needs you"), and no longer mislabels a question as "waiting on an action".
 
     SETUP
     1. Power the robot on the REAR USB-C port (validated-stable; front/USB-B browns out).
@@ -125,28 +151,36 @@ status:
     5. By VOICE: "Spawn a manager named builder on C:/Source/reacher that asks me a
        clarifying question and waits for my answer."  (This parks it blocked/waitingFor —
        the exact case that was silent before. A build that fails + reports HUMAN_GATE also works.)
-    6. LISTEN: Reachy SPEAKS the escalation aloud, e.g. "builder needs you: <the question>"
-       (or "heads up — builder failed and needs you"). LOOK: builder card is present and
+    6. LISTEN: Reachy SPEAKS the escalation aloud. Because it is a QUESTION, Reachy should
+       correctly say it needs an ANSWER to a question (e.g. "builder needs your answer:
+       <the question>") — NOT "waiting on an action". LOOK: builder card is present and
        flagged for attention on /fleet.
     7. ANSWER BY VOICE, e.g.: "Tell builder to use port 8080 and continue."
        EXPECT: Reachy calls answer_gate and confirms aloud ("answered builder and resumed its
        work"); on /fleet builder leaves the gated state and continues.
 
-    TEST C — dashboard readability + motion smoothness
+    TEST C — dashboard width + motion (the re-tested asks)
     8. Open http://127.0.0.1:7860/fleet: confirm ALL spawned managers show as cards (none
-       missing), the cards are readable/wide enough, and the transcript details expand AND
-       stay open across the ~2s live polls.
-    9. WATCH the robot as it turns between managers / signals attention: motion should be
-       SMOOTH (eases in and out), not abrupt/jerky. Idle breathing still runs.
+       missing), the cards are WIDE (each spans the window width, transcript readable), and
+       the transcript details expand AND stay open across the ~2s live polls.
+    9. WATCH the robot: at IDLE the breathing should be SMALL/calm (gentle, not big sweeps),
+       and when it turns between managers / signals attention the gesture should be SUBTLE
+       and smooth (small yaw, eases in/out) — not big or abrupt.
+
+    TEST D — listens long enough (don't-cut-me-off)
+    10. Speak a SLOW sentence to Reachy with a deliberate mid-sentence pause. EXPECT: Reachy
+        WAITS for you to finish before it responds (it should not jump in during the pause).
 
     CLEANUP
-    10. By VOICE: "Stop and remove the greeter and builder managers"  (or `claude stop <id>`
+    11. By VOICE: "Stop and remove the greeter and builder managers"  (or `claude stop <id>`
         + `claude rm <id>` for each). Confirm `claude agents --json` shows no stray bg managers
-        (your interactive reacher-7f + run.ps1 app may remain).
+        (your interactive sessions + run.ps1 app may remain).
 
-    PASS if: Reachy SPEAKS completion (A) AND the blocked/gate "needs you" (B), a spoken answer
-    resumes the gated manager, every card is visible + readable + expandable (C8), and motion
-    is smooth (C9). Report PASS, or describe exactly what was/wasn't spoken/seen.
+    PASS if: (A) completion spoken + card stays; (B) the gate "needs you" is spoken AND, for a
+    question, phrased as needing an ANSWER (not an action), and a spoken answer resumes the
+    manager; (C) idle motion is small/calm + gestures subtle, and cards are WIDE + expandable;
+    (D) Reachy waits for you to finish before acting. Report PASS, or describe exactly what
+    was/wasn't spoken/seen/felt.
 
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
