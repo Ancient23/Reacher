@@ -47,6 +47,12 @@ in committed git state — trust only the files named here, not any memory of pr
    - could not complete the unit (tests red / blocked) → `ROADMAP_STATE: FAILED`
 
 ## Hard rules
+- **Avoid the stream-stall watchdog.** A worker is KILLED if it emits no output for ~600s. Never
+  run one long silent command (a slow `pytest`, a real `claude --bg` that drives a loop) unbounded:
+  cap every real-bg step with an explicit timeout (120–180s) + `check=False`, and print a one-line
+  progress note between expensive steps so the stream stays alive. Keep chat output terse — never
+  paste large diffs/transcripts. A killed worker leaves a clean no-op (state is committed), so the
+  loop just re-spawns — but bounded steps avoid the wasted iteration.
 - ONE unit per iteration. Re-read `STATE.yaml` every time; assume nothing from past turns.
 - **Never fake a hardware/perceptual check as passing** — gate it.
 - Never do anything outward-facing (publish, new remote, outbound comms) without an `approval` gate.
