@@ -178,6 +178,12 @@ from .voice import (
     speakable_kind,
     voice_phrase_for,
 )
+from .voice_contract import (
+    EXPLAIN_OPTIONS_TEXT,
+    wants_immediate_kickoff,
+    sounds_like_confirmation,
+    summarize_spawn_confirmation,
+)
 
 
 __all__ = [
@@ -314,4 +320,9 @@ __all__ = [
     "VOICE_FAILED",
     "VOICE_GATE",
     "VOICE_COMPLETED",
+    # voice interaction contract (U17)
+    "EXPLAIN_OPTIONS_TEXT",
+    "wants_immediate_kickoff",
+    "sounds_like_confirmation",
+    "summarize_spawn_confirmation",
 ]

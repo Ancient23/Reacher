@@ -81,6 +81,17 @@ class SpawnManager(Tool):
                     "manager more cautiously (e.g. 'acceptEdits' to gate shell commands)."
                 ),
             },
+            "confirmed": {
+                "type": "boolean",
+                "description": (
+                    "Confirm-before-kickoff (decision #20). Omit or set false on the FIRST call: "
+                    "the tool then does NOT spawn — it returns a short spoken readback of the "
+                    "resolved settings (task, project, run mode) for you to say aloud; wait for "
+                    "the user's spoken OK, then call again with confirmed=true (same arguments). "
+                    "Set true immediately ONLY when the user already told you to skip "
+                    "confirmation (e.g. 'just do it', 'just spawn it', 'no need to confirm')."
+                ),
+            },
         },
         "required": ["name", "task"],
     }
@@ -115,6 +126,35 @@ class SpawnManager(Tool):
             permission_mode = resolve_permission_mode(kwargs.get("permission_mode"))
         except FleetManagerError as e:
             return {"error": str(e)}
+
+        # Confirm-before-kickoff (decision #20 / U17): the first call (without
+        # confirmed=true) never spawns — it returns the spoken readback of the
+        # resolved settings for the persona to say aloud. The model re-calls
+        # with confirmed=true after the user's spoken OK (or immediately when
+        # the user said "just do it").
+        if not kwargs.get("confirmed"):
+            from reachy_fleet_supervisor.fleet.voice_contract import (
+                summarize_spawn_confirmation,
+            )
+
+            return {
+                "status": "needs_confirmation",
+                "name": name,
+                "run_mode": run_mode,
+                "permission_mode": permission_mode,
+                "confirmation": summarize_spawn_confirmation(
+                    name=name,
+                    task=task,
+                    cwd=cwd,
+                    run_mode=run_mode,
+                    permission_mode=permission_mode,
+                ),
+                "instructions": (
+                    "Nothing was spawned yet. Say the 'confirmation' text aloud, wait "
+                    "for the user's OK, then call spawn_manager again with the same "
+                    "arguments plus confirmed=true."
+                ),
+            }
 
         try:
             from reachy_fleet_supervisor.fleet.runtime import get_fleet_runtime

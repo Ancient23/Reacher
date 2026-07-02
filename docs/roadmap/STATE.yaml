@@ -17,10 +17,49 @@ meta:
 status:
   current_phase: 3
   next_unit: U17
-  in_progress: null
+  in_progress: U17
   failure_count: 0
   units_done: 16
   units_total: 26
+  pending_gate:
+    unit: U17
+    title: Voice interaction contract (decision #20)
+    what_was_built: >
+      fleet/voice_contract.py (wants_immediate_kickoff, sounds_like_confirmation,
+      summarize_spawn_confirmation, EXPLAIN_OPTIONS_TEXT) + spawn_manager tool's
+      new confirmed:boolean param (first call without confirmed returns a spoken
+      readback and does NOT spawn; a second call with confirmed=true, or an
+      up-front "just do it", spawns) + persona instructions.txt updated to speak
+      the confirm-before-kickoff flow and explain options on request. All
+      software-testable pieces are green (fleet suite 347, tools suite 36); only
+      whether it SOUNDS right and works by voice on the robot needs a human check.
+    steps: |
+      1. Power on the Reachy Mini Lite via the REAR USB-C port (front/USB-B
+         browns out the motors) and start the app per CLAUDE.md / run.ps1:
+             cd reachy_fleet_supervisor
+             ./run.ps1
+      2. Test A (normal confirm flow): say "spawn a manager called tester on
+         <some project path or name> to <a short task>". LISTEN for Reachy to
+         read back the task, project, and (if non-default) run mode/permission
+         mode, ending with "Say go ahead, or tell me what to change." It must
+         NOT spawn yet (no dashboard card / body signal for it).
+      3. Say "go ahead" (or "yes" / "sounds good"). LISTEN/LOOK for Reachy to
+         confirm it started and for the manager to actually appear on the
+         dashboard (http://localhost:<port>/fleet) and register on the body.
+      4. Test B (skip phrase): say "spawn a manager called quick on <project>
+         to <task>, just do it". LISTEN for Reachy to skip the readback and
+         spawn immediately (no confirmation question).
+      5. Test C (correction): repeat step 2, then when Reachy reads back,
+         say something like "no, use the other project instead" or "actually
+         make it remote-control mode". LISTEN for Reachy to adjust and read
+         back again (not spawn on the uncorrected settings).
+      6. Test D (explain options): ask "what are my options?" or "how do I
+         run this remotely?". LISTEN for a short, natural spoken explanation
+         (background vs remote-control, permission mode, the skip phrase) with
+         a spoken example request.
+      Report PASS/PROBLEM per test (A-D) back to the loop; a PROBLEM should
+      describe what was heard/seen vs. expected so the next worker can fix it
+      in place (U17 stays in_progress until confirmed).
   # Phase 2 COMPLETE (U1-U10). U11 (Phase 3 run_mode knob) DONE — software complete +
   # green; the optional RC LIVE-CONNECT check (claude.ai-OAuth steering) was SKIPPED by
   # explicit human choice (2026-06-30): the RC software path is complete and tested, the

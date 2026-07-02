@@ -214,7 +214,9 @@ def test_voice_spawn_makes_manager_visible_on_dashboard(tmp_path: Path) -> None:
     set_fleet_runtime(rt)
 
     SpawnManager = _load_spawn_manager_cls()
-    out = asyncio.run(SpawnManager()(None, name="tester", path=str(tmp_path), task="run the tests"))
+    out = asyncio.run(
+        SpawnManager()(None, name="tester", path=str(tmp_path), task="run the tests", confirmed=True)
+    )
 
     assert out["status"] == "spawned"
     assert out["name"] == "tester"
@@ -266,7 +268,9 @@ def test_voice_spawn_defaults_to_non_interactive_permission_mode(
     rt, captured = _capturing_runtime()
     set_fleet_runtime(rt)
     SpawnManager = _load_spawn_manager_cls()
-    out = asyncio.run(SpawnManager()(None, name="tester", path=str(tmp_path), task="run tests"))
+    out = asyncio.run(
+        SpawnManager()(None, name="tester", path=str(tmp_path), task="run tests", confirmed=True)
+    )
     assert out["status"] == "spawned"
     assert captured["permission_mode"] == "bypassPermissions"
 
@@ -280,7 +284,14 @@ def test_voice_spawn_permission_mode_override_wins(
     set_fleet_runtime(rt)
     SpawnManager = _load_spawn_manager_cls()
     out = asyncio.run(
-        SpawnManager()(None, name="tester", path=str(tmp_path), task="t", permission_mode="acceptEdits")
+        SpawnManager()(
+            None,
+            name="tester",
+            path=str(tmp_path),
+            task="t",
+            permission_mode="acceptEdits",
+            confirmed=True,
+        )
     )
     assert out["status"] == "spawned"
     assert captured["permission_mode"] == "acceptEdits"
@@ -294,7 +305,9 @@ def test_voice_spawn_env_sets_default_permission_mode(
     rt, captured = _capturing_runtime()
     set_fleet_runtime(rt)
     SpawnManager = _load_spawn_manager_cls()
-    asyncio.run(SpawnManager()(None, name="tester", path=str(tmp_path), task="t"))
+    asyncio.run(
+        SpawnManager()(None, name="tester", path=str(tmp_path), task="t", confirmed=True)
+    )
     assert captured["permission_mode"] == "dontAsk"
 
 
@@ -321,7 +334,9 @@ def test_voice_spawn_defaults_to_background_run_mode(
     rt, captured = _capturing_runtime()
     set_fleet_runtime(rt)
     SpawnManager = _load_spawn_manager_cls()
-    out = asyncio.run(SpawnManager()(None, name="tester", path=str(tmp_path), task="run tests"))
+    out = asyncio.run(
+        SpawnManager()(None, name="tester", path=str(tmp_path), task="run tests", confirmed=True)
+    )
     assert out["status"] == "spawned"
     assert out["run_mode"] == "background"
     assert captured["run_mode"] == "background"
@@ -337,7 +352,12 @@ def test_voice_spawn_remote_control_run_mode(
     SpawnManager = _load_spawn_manager_cls()
     out = asyncio.run(
         SpawnManager()(
-            None, name="phone", path=str(tmp_path), task="watch this", run_mode="remote-control"
+            None,
+            name="phone",
+            path=str(tmp_path),
+            task="watch this",
+            run_mode="remote-control",
+            confirmed=True,
         )
     )
     assert out["status"] == "spawned"
