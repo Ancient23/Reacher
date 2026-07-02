@@ -31,7 +31,7 @@ the config fails loudly at load time rather than mid-spawn.
 
 from __future__ import annotations
 import json
-from typing import Literal
+from typing import Literal, Optional, Sequence
 from pathlib import Path
 
 import tomllib
@@ -189,6 +189,55 @@ class ProjectDefaults(_StrictModel):
         return value
 
 
+def mcp_server_entry(server: McpServerConfig) -> dict:
+    """Build one entry of a Claude Code ``--mcp-config`` ``mcpServers`` map.
+
+    Stdio servers (``command`` set) -> ``{"command": ..., "args": [...], "env":
+    {...}}`` (``args``/``env`` omitted when empty, matching the CLI's own
+    minimal shape). HTTP/SSE servers (``url`` set) -> ``{"type": "http", "url":
+    ...}``. ``McpServerConfig`` already guarantees exactly one of the two is set.
+    """
+    if server.command:
+        entry: dict[str, object] = {"command": server.command}
+        if server.args:
+            entry["args"] = list(server.args)
+        if server.env:
+            entry["env"] = dict(server.env)
+        return entry
+    entry = {"type": "http", "url": server.url}
+    if server.env:
+        entry["env"] = dict(server.env)
+    return entry
+
+
+def mcp_config_payload(servers: Sequence[McpServerConfig]) -> dict:
+    """Build the whole ``--mcp-config`` JSON payload for a list of servers.
+
+    Shape: ``{"mcpServers": {"<name>": {...}, ...}}`` — the format Claude Code's
+    ``--mcp-config <file>`` flag expects. Returns ``{"mcpServers": {}}`` for an
+    empty list (callers typically skip writing a file in that case — see
+    :func:`write_mcp_config_file`).
+    """
+    return {"mcpServers": {server.name: mcp_server_entry(server) for server in servers}}
+
+
+def write_mcp_config_file(servers: Sequence[McpServerConfig], path: str | Path) -> Optional[Path]:
+    """Materialize *servers* as a ``--mcp-config`` JSON file at *path*.
+
+    Returns ``None`` (writing nothing) when *servers* is empty — a project with
+    no ``mcp`` entries needs no ``--mcp-config`` flag at all. Otherwise writes
+    the file (creating parent directories as needed) and returns its path, so
+    the caller can pass it straight into ``mcp_configs=[...]`` at spawn time
+    (U2's ``build_spawn_argv`` / ``FleetManager.spawn``).
+    """
+    if not servers:
+        return None
+    target = Path(path).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(mcp_config_payload(servers), indent=2), encoding="utf-8")
+    return target
+
+
 class ProjectConfig(_StrictModel):
     """A project a manager can be pointed at.
 
@@ -224,6 +273,15 @@ class ProjectConfig(_StrictModel):
                 f"project '{self.name}' has duplicate mcp server names: {dupes}"
             )
         return self
+
+    def materialize_mcp_config(self, path: str | Path) -> Optional[Path]:
+        """Write this project's ``mcp`` servers to *path* as a ``--mcp-config`` file.
+
+        Thin wrapper around :func:`write_mcp_config_file` for the project's own
+        ``mcp`` list. Returns ``None`` (writes nothing) when the project has no
+        MCP servers configured — U18's "config only, no hard dependency."
+        """
+        return write_mcp_config_file(self.mcp, path)
 
 
 class FleetConfig(_StrictModel):

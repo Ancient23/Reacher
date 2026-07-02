@@ -16,10 +16,10 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 3
-  next_unit: U17
+  next_unit: U19
   in_progress: U17
   failure_count: 0
-  units_done: 16
+  units_done: 17
   units_total: 26
   pending_gate:
     unit: U17
@@ -177,6 +177,35 @@ status:
   # prompt clause presence/absence, spawn materialization). Fleet suite 337
   # green; 0 stray bg agents (one stray u12-steer agent from a timeout-killed
   # partial pytest run was found and stopped/removed during this iteration).
+  #
+  # U17 (Phase 3) IN PROGRESS, HARDWARE-gated — pending_gate below UNCHANGED
+  # this iteration (deferred by explicit human choice 2026-07-02: continue on
+  # software units while robot verification is pending). Do NOT resolve it
+  # without a real human report from the robot.
+  #
+  # U18 (Phase 3) DONE — MCP-general per-worker MCP config. fleet/config.py
+  # gains pure mcp_server_entry (McpServerConfig -> the claude --mcp-config
+  # {command,args,env} stdio shape or {type:"http",url,[env]} shape) +
+  # mcp_config_payload (wraps N entries as {"mcpServers": {...}}) +
+  # write_mcp_config_file (materializes to a JSON file; empty list writes
+  # nothing and returns None — "no hard dependency" per acceptance) +
+  # ProjectConfig.materialize_mcp_config (thin per-project wrapper). fleet/
+  # session_manager.py gains SessionManager.spawn_project(fleet_config,
+  # project_name, task, name=...): resolves cwd/run_mode/permission_mode/model
+  # from the project's effective config (reusing U11/U14's run_mode_for /
+  # permission_mode_for / defaults.model), materializes the project's mcp[] to
+  # a per-project file under <tmp>/reachy-fleet-mcp/<project>.mcp.json (stable
+  # across repeat spawns), and passes it through to FleetManager.spawn's
+  # existing mcp_configs=[...] (U2 --mcp-config plumbing, unchanged). A
+  # project with no mcp[] spawns with an empty mcp_configs list, so this adds
+  # zero hard dependency on any particular MCP server (Unreal 5.8 MCP is a
+  # config-only test target, not exercised live — no Unreal install here).
+  # 18 new tests (entry/payload shapes, empty-list no-op, file materialization
+  # + dir creation, spawn_project resolves defaults + writes the file + wires
+  # mcp_configs, no-mcp project passes an empty list). Fleet suite 355 green;
+  # 0 stray bg agents (one stray u12-steer agent left over from a prior
+  # iteration's test run was found via `claude agents --json` and
+  # stopped/removed during this iteration's verification).
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
   - id: U1
@@ -305,7 +334,7 @@ units:
     phase: 3
     title: MCP-general per-worker MCP config
     gate: software
-    status: pending
+    status: done
     deps: [U1, U2]
     acceptance: "Per-worker MCP servers wired through spawn (--mcp-config); a manager can drive an MCP-backed target (e.g. Unreal 5.8 MCP as a test target — config only, no hard dependency). Tested."
 

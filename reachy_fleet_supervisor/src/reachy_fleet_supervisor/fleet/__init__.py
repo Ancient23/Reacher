@@ -86,6 +86,9 @@ from .config import (
     gate_trigger_of,
     load_fleet_config,
     parse_fleet_config,
+    mcp_server_entry,
+    mcp_config_payload,
+    write_mcp_config_file,
 )
 from .status import (
     STATUS_DIR_ENV,
@@ -198,6 +201,9 @@ __all__ = [
     "classify_status",
     "gate_trigger_of",
     "McpServerConfig",
+    "mcp_server_entry",
+    "mcp_config_payload",
+    "write_mcp_config_file",
     "ProjectDefaults",
     "ProjectConfig",
     "FleetConfig",

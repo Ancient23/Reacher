@@ -8,16 +8,20 @@ session from the live roster, then ALWAYS cleans it up. It is skipped when the
 """
 
 from __future__ import annotations
+import json
 import uuid
 import shutil
+from pathlib import Path
 
 import pytest
 
 from reachy_fleet_supervisor.fleet import (
     AgentInfo,
+    FleetConfig,
     FleetManager,
     FleetManagerError,
     SessionManager,
+    parse_fleet_config,
 )
 from reachy_fleet_supervisor.fleet import session_manager as sm_mod
 
@@ -249,6 +253,73 @@ def test_spawn_tracks_via_session_manager(monkeypatch) -> None:
     assert mgr.id == "ffff6666"
     assert sm.get("newone") is mgr
     assert captured == {"task": "build it", "name": "newone", "claude_bin": "claude-test"}
+
+
+def test_spawn_project_materializes_mcp_config_and_resolves_defaults(
+    tmp_path, monkeypatch
+) -> None:
+    """spawn_project() wires a project's mcp[] through --mcp-config (U18)."""
+    cfg = parse_fleet_config(
+        {
+            "permission_mode": "bypassPermissions",
+            "run_mode": "background",
+            "projects": [
+                {
+                    "name": "unreal_proj",
+                    "path": str(tmp_path / "repo"),
+                    "mcp": [
+                        {"name": "unreal", "command": "uv", "args": ["run", "unreal-mcp"]},
+                    ],
+                    "defaults": {"model": "claude-sonnet-4-6"},
+                },
+            ],
+        }
+    )
+
+    captured: dict = {}
+
+    def fake_spawn(cls, task, *, name, claude_bin="claude", **kwargs):
+        captured["task"] = task
+        captured["name"] = name
+        captured.update(kwargs)
+        return _handle("aaaa1111", name)
+
+    monkeypatch.setattr(sm_mod.FleetManager, "spawn", classmethod(fake_spawn))
+    sm = SessionManager()
+    mgr = sm.spawn_project(
+        cfg, "unreal_proj", "drive unreal", name="ue-worker", mcp_config_dir=tmp_path / "mcp"
+    )
+
+    assert mgr.id == "aaaa1111"
+    assert captured["task"] == "drive unreal"
+    assert str(captured["cwd"]) == str((tmp_path / "repo"))
+    assert captured["run_mode"] == "background"
+    assert captured["permission_mode"] == "bypassPermissions"
+    assert captured["model"] == "claude-sonnet-4-6"
+    assert len(captured["mcp_configs"]) == 1
+    mcp_path = Path(captured["mcp_configs"][0])
+    assert mcp_path.is_file()
+    assert json.loads(mcp_path.read_text(encoding="utf-8")) == {
+        "mcpServers": {"unreal": {"command": "uv", "args": ["run", "unreal-mcp"]}}
+    }
+
+
+def test_spawn_project_without_mcp_servers_passes_none(tmp_path, monkeypatch) -> None:
+    """A project with no mcp[] spawns with an empty mcp_configs list — no hard dependency."""
+    cfg = parse_fleet_config(
+        {"projects": [{"name": "plain", "path": str(tmp_path / "repo")}]}
+    )
+
+    captured: dict = {}
+
+    def fake_spawn(cls, task, *, name, claude_bin="claude", **kwargs):
+        captured.update(kwargs)
+        return _handle("bbbb2222", name)
+
+    monkeypatch.setattr(sm_mod.FleetManager, "spawn", classmethod(fake_spawn))
+    sm = SessionManager()
+    sm.spawn_project(cfg, "plain", "task", name="w", mcp_config_dir=tmp_path / "mcp")
+    assert captured["mcp_configs"] == []
 
 
 # ---------------------------------------------------------------------------

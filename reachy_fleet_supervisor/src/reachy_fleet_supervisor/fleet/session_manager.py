@@ -23,7 +23,8 @@ every control call delegates to the wrapped :class:`FleetManager`.
 
 from __future__ import annotations
 import logging
-from typing import Any, Callable, Iterator, Optional, Sequence
+import tempfile
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional, Sequence
 from pathlib import Path
 
 from .manager import (
@@ -34,6 +35,9 @@ from .manager import (
     FleetManagerError,
     list_agents,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard, types only
+    from .config import FleetConfig
 
 
 logger = logging.getLogger(__name__)
@@ -174,6 +178,73 @@ class SessionManager:
             **spawn_kwargs,  # e.g. timeout / resolve_retries / launcher
         )
         return self.adopt(manager)
+
+    def spawn_project(
+        self,
+        fleet_config: "FleetConfig",
+        project_name: str,
+        task: str,
+        *,
+        name: str,
+        run_mode: Optional[str] = None,
+        permission_mode: Optional[str] = None,
+        model: Optional[str] = None,
+        mcp_config_dir: Optional[str | Path] = None,
+        extra_mcp_configs: Sequence[str] = (),
+        worktree: Optional[str | bool] = None,
+        extra_args: Sequence[str] = (),
+        **spawn_kwargs: Any,
+    ) -> FleetManager:
+        """Spawn a manager for a configured *project* (U18 — MCP-general wiring).
+
+        Resolves ``cwd`` from ``fleet_config.project(project_name).path`` and the
+        effective ``run_mode``/``permission_mode``/``model`` from the project's
+        defaults (``FleetConfig.run_mode_for`` / ``permission_mode_for`` /
+        ``ProjectDefaults.model``) unless overridden here. The project's ``mcp``
+        servers (decision: MCP-general — e.g. an Unreal 5.8 MCP target) are
+        materialized to a JSON ``--mcp-config`` file via
+        ``ProjectConfig.materialize_mcp_config`` and passed through to
+        :meth:`spawn`; a project with no ``mcp`` entries spawns with none (no
+        hard dependency on any particular MCP server). ``extra_mcp_configs`` lets
+        the caller layer additional ``--mcp-config`` files on top.
+
+        ``mcp_config_dir`` defaults to a per-project file under the system temp
+        dir (``<tmp>/reachy-fleet-mcp/<project>.mcp.json``) so repeated spawns of
+        the same project reuse/overwrite the same materialized file rather than
+        littering new ones.
+        """
+        project = fleet_config.project(project_name)
+        effective_run_mode = run_mode if run_mode is not None else fleet_config.run_mode_for(project_name)
+        effective_permission_mode = (
+            permission_mode
+            if permission_mode is not None
+            else fleet_config.permission_mode_for(project_name)
+        )
+        effective_model = model if model is not None else project.defaults.model
+
+        config_dir = (
+            Path(mcp_config_dir)
+            if mcp_config_dir is not None
+            else Path(tempfile.gettempdir()) / "reachy-fleet-mcp"
+        )
+        mcp_configs: list[str] = []
+        materialized = project.materialize_mcp_config(config_dir / f"{project.name}.mcp.json")
+        if materialized is not None:
+            mcp_configs.append(str(materialized))
+        mcp_configs.extend(extra_mcp_configs)
+
+        return self.spawn(
+            task,
+            name=name,
+            cwd=project.path,
+            run_mode=effective_run_mode,
+            permission_mode=effective_permission_mode,
+            model=effective_model,
+            mcp_configs=mcp_configs,
+            worktree=worktree,
+            extra_args=extra_args,
+            **spawn_kwargs,
+        )
 
     # ---- reconnect (the U3 headline) -------------------------------------
 

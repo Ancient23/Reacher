@@ -18,8 +18,11 @@ from reachy_fleet_supervisor.fleet import (
     classify_status,
     gate_trigger_of,
     load_fleet_config,
+    mcp_server_entry,
     parse_fleet_config,
+    mcp_config_payload,
     SENTINEL_FAILED,
+    write_mcp_config_file,
     SENTINEL_HUMAN_GATE,
     SENTINEL_COMPLETE,
 )
@@ -476,3 +479,80 @@ def test_classify_for_uses_effective_policy() -> None:
     # status-level helper.
     push_gate = ManagerStatus(state=SENTINEL_HUMAN_GATE, extra={"gate_trigger": "push"})
     assert cfg.classify_status_for("auto_proj", push_gate) == GATE_ESCALATE
+
+
+# ---------------------------------------------------------------------------
+# MCP-general per-worker MCP config (U18)
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_server_entry_stdio() -> None:
+    """A stdio server becomes {command, args, env} (fields omitted when empty)."""
+    bare = McpServerConfig(name="unreal", command="uv")
+    assert mcp_server_entry(bare) == {"command": "uv"}
+
+    full = McpServerConfig(
+        name="unreal", command="uv", args=["run", "unreal-mcp"], env={"UE_PORT": "9000"}
+    )
+    assert mcp_server_entry(full) == {
+        "command": "uv",
+        "args": ["run", "unreal-mcp"],
+        "env": {"UE_PORT": "9000"},
+    }
+
+
+def test_mcp_server_entry_http() -> None:
+    """A url server becomes {type: http, url, [env]}."""
+    server = McpServerConfig(name="browser", url="http://localhost:9001/mcp")
+    assert mcp_server_entry(server) == {"type": "http", "url": "http://localhost:9001/mcp"}
+
+
+def test_mcp_config_payload_shape() -> None:
+    """The whole payload is {mcpServers: {name: entry, ...}}."""
+    servers = [
+        McpServerConfig(name="unreal", command="uv", args=["run", "unreal-mcp"]),
+        McpServerConfig(name="browser", url="http://localhost:9001/mcp"),
+    ]
+    payload = mcp_config_payload(servers)
+    assert payload == {
+        "mcpServers": {
+            "unreal": {"command": "uv", "args": ["run", "unreal-mcp"]},
+            "browser": {"type": "http", "url": "http://localhost:9001/mcp"},
+        }
+    }
+    assert mcp_config_payload([]) == {"mcpServers": {}}
+
+
+def test_write_mcp_config_file_empty_writes_nothing(tmp_path: Path) -> None:
+    """No mcp servers -> no file written, return None (no hard dependency, U18)."""
+    target = tmp_path / "sub" / "cfg.json"
+    result = write_mcp_config_file([], target)
+    assert result is None
+    assert not target.exists()
+
+
+def test_write_mcp_config_file_writes_json(tmp_path: Path) -> None:
+    """Non-empty servers materialize a valid --mcp-config JSON file, dirs created."""
+    target = tmp_path / "sub" / "cfg.json"
+    servers = [McpServerConfig(name="unreal", command="uv", args=["run", "unreal-mcp"])]
+    result = write_mcp_config_file(servers, target)
+    assert result == target
+    assert target.is_file()
+    assert json.loads(target.read_text(encoding="utf-8")) == {
+        "mcpServers": {"unreal": {"command": "uv", "args": ["run", "unreal-mcp"]}}
+    }
+
+
+def test_project_materialize_mcp_config(tmp_path: Path) -> None:
+    """ProjectConfig.materialize_mcp_config wraps write_mcp_config_file for its own list."""
+    empty_project = ProjectConfig(name="empty", path="/x")
+    assert empty_project.materialize_mcp_config(tmp_path / "empty.json") is None
+
+    project = ProjectConfig(
+        name="unreal_proj",
+        path="/x",
+        mcp=[McpServerConfig(name="unreal", command="uv", args=["run", "unreal-mcp"])],
+    )
+    out = project.materialize_mcp_config(tmp_path / "unreal_proj.mcp.json")
+    assert out is not None and out.is_file()
+    assert json.loads(out.read_text(encoding="utf-8"))["mcpServers"]["unreal"]["command"] == "uv"
