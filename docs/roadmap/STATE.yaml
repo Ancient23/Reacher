@@ -15,11 +15,11 @@ meta:
 #   hardware  — needs the physical robot (motion / voice / vision); implement then HUMAN_GATE.
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
-  current_phase: 4
-  next_unit: U24
+  current_phase: 5
+  next_unit: U25
   in_progress: null   # U17 stays gated via pending_gate (deferred by human 2026-07-02)
   failure_count: 0
-  units_done: 21
+  units_done: 22
   deferred_gates:
     # Robot-verification steps recorded but NOT blocking the loop (human choice
     # 2026-07-02: keep making software progress without the robot). Resolve each
@@ -63,6 +63,23 @@ status:
         4. (Optional, after U20's camera frame_provider is wired) construct a
            FleetObserver with source="camera" and confirm the comment matches
            the physical scene.
+    - unit: U24
+      title: Customization (keys/models/projects/personas) + UI polish
+      note: >
+        Software slice DONE + tested (fleet/config.py PersonaConfig +
+        FleetConfig.model/personas/persona + model_for/persona_for resolvers;
+        fleet/dashboard.py render_settings_panel wired into
+        create_dashboard_app(fleet_config=...)). This is a light, NON-blocking
+        visual-polish check per the acceptance ("visual = light human check"),
+        not a hardware gate — the loop keeps going without it.
+      steps: |
+        1. Start the app (cd reachy_fleet_supervisor; ./run.ps1) with a fleet
+           config that has 1-2 projects, then open http://localhost:<port>/fleet.
+        2. LOOK: a collapsed "fleet settings (N project(s))" panel appears
+           above the card grid; expanding it shows a small table with each
+           project's effective model/run mode/permission/backend/persona and
+           reads cleanly (no overflow/clipping) alongside the existing wide
+           cards.
   units_total: 26
   pending_gate:
     unit: U17
@@ -313,6 +330,55 @@ status:
   # u12-steer bg agent left over from a PRIOR iteration's test run was found
   # via `claude agents --json` and stopped/removed during this iteration's
   # verification (not created by this unit's tests, which are fully mocked).
+  #
+  # U24 (Phase 5) DONE — customization (keys/models/projects/personas) + UI
+  # polish. fleet/config.py: PersonaConfig (name/voice/instructions, U24's
+  # persona shape) + ProjectDefaults.persona (project-level persona name
+  # reference) + FleetConfig.model / FleetConfig.personas / FleetConfig.persona
+  # (fleet-wide defaults) + two new validators (unique persona names; every
+  # persona *reference* — fleet-wide or per-project — must name a defined
+  # persona, fails loudly at load time like every other config typo) + new
+  # resolvers model_for(name, override=) and persona_for(name, override=)
+  # mirroring the existing override>project>fleet precedence pattern
+  # (backend_for/run_mode_for/permission_mode_for). Along the way, fixed a
+  # latent bug in session_manager.spawn_project: it read
+  # project.defaults.model directly, silently dropping any fleet-wide `model`
+  # default for a project that didn't set its own — now routed through
+  # model_for (regression test added). fleet/dashboard.py: new
+  # render_settings_panel(fleet_config) — a read-only, collapsed table above
+  # the card grid showing each project's EFFECTIVE model/run_mode/
+  # permission_mode/backend/persona (reuses the same resolvers spawn_project
+  # calls, so the panel can't drift from what actually spawns); create_dashboard_app
+  # gains an optional fleet_config= kwarg that wires it in (omitted = pre-U24
+  # page, byte-identical). All new symbols exported via fleet/__init__.
+  # 26 new tests (config: model_for/persona_for precedence+defaults, blank/
+  # duplicate/dangling persona-name validation, unknown-override KeyError;
+  # session_manager: fleet-wide-model regression; dashboard: empty/populated/
+  # HTML-escaped settings panel, index with/without fleet_config). Full
+  # software suite (--ignore=tests/vision): 535 passed, 2 failed = the same
+  # known pre-existing profile-loading failures (test_config_name_collisions /
+  # test_external_loading, unrelated, documented since U1); tests/vision
+  # torch-less collection error also pre-existing/unrelated, ignored per
+  # standing guidance. HYGIENE: checked `claude agents --json` before and
+  # after — only the 2 interactive human sessions present, no stray u12-steer
+  # (or any) bg agent this iteration. Investigated the "leaves a stray
+  # u12-steer bg agent on a full-suite run" report: read
+  # test_real_bg_steering_round_trip (tests/fleet/test_manager.py) end to end
+  # — it already wraps spawn/steer in try/finally with mgr.stop_and_remove()
+  # unconditionally in finally, so a normal pass/fail/exception inside the
+  # test body cannot leak. The actual leak vector (confirmed by JOURNAL
+  # history: U16/U18/U23 each independently found+cleaned a stray u12-steer
+  # agent from an EARLIER iteration, never from that same iteration's own
+  # run) is an external hard-kill of pytest mid-run — a shell/tool timeout
+  # SIGKILLing the process skips Python's `finally` entirely, since the CLAUDE
+  # process itself hasn't returned control to Python. That mitigation is
+  # already the standing guidance ("run pytest in the foreground WITHOUT a
+  # shell timeout") and this iteration followed it (--timeout 600000ms,
+  # completed at 226s). No code change made for this — the teardown logic
+  # itself is correct; the fix is procedural and already in force. Visual
+  # polish (dashboard settings panel) is HTML-only, not yet human-eyeballed;
+  # noted as a light, non-blocking deferred_gates entry below. units_done
+  # 21->22, current_phase 4->5.
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
   - id: U1
@@ -489,7 +555,8 @@ units:
     phase: 5
     title: Customization (keys/models/projects/personas) + UI polish
     gate: software
-    status: pending
+    status: done
+    notes: "Software slice done 2026-07-02 (PersonaConfig + model_for/persona_for resolvers + dashboard settings panel); visual check recorded in status.deferred_gates (non-blocking, light-check acceptance)."
     deps: [U7, U11]
     acceptance: "User-configurable keys, models, projects, personas; dashboard polish. Tested (visual = light human check)."
   - id: U25

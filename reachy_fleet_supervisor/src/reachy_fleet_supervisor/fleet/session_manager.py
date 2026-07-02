@@ -228,7 +228,7 @@ class SessionManager:
         Resolves ``cwd`` from ``fleet_config.project(project_name).path`` and the
         effective ``run_mode``/``permission_mode``/``model`` from the project's
         defaults (``FleetConfig.run_mode_for`` / ``permission_mode_for`` /
-        ``ProjectDefaults.model``) unless overridden here. The project's ``mcp``
+        ``model_for``, U24) unless overridden here. The project's ``mcp``
         servers (decision: MCP-general — e.g. an Unreal 5.8 MCP target) are
         materialized to a JSON ``--mcp-config`` file via
         ``ProjectConfig.materialize_mcp_config`` and passed through to
@@ -255,7 +255,7 @@ class SessionManager:
             if permission_mode is not None
             else fleet_config.permission_mode_for(project_name)
         )
-        effective_model = model if model is not None else project.defaults.model
+        effective_model = fleet_config.model_for(project_name, override=model)
         effective_backend = fleet_config.backend_for(project_name, override=backend)
         project.materialize_backend_settings(
             effective_backend, project.path / ".claude" / "settings.json"

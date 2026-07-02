@@ -254,6 +254,28 @@ def write_backend_settings_file(backend: BackendConfig, path: str | Path) -> Opt
     return target
 
 
+class PersonaConfig(_StrictModel):
+    """A named voice persona (U24: user-configurable personas).
+
+    Purely descriptive at this layer — ``voice`` is an optional Realtime voice
+    id override and ``instructions`` an optional persona blurb/system-prompt
+    fragment a future renderer can splice into the locked profile's
+    ``instructions.txt``. Kept intentionally small: this unit's job is the
+    *config shape* + *resolution* + dashboard surfacing, not a persona engine.
+    """
+
+    name: str
+    voice: str | None = None
+    instructions: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("persona name must not be blank")
+        return value.strip()
+
+
 class ProjectDefaults(_StrictModel):
     """Per-project default spawn settings, overridable by voice at runtime.
 
@@ -264,7 +286,9 @@ class ProjectDefaults(_StrictModel):
     ``run_mode`` overrides the fleet-wide default (``FleetConfig.run_mode``,
     resolved by ``run_mode_for``); when either is unset (``None``) the fleet
     default applies. A spawned manager has no TTY, so a permission mode that still
-    prompts deadlocks it — see ``manager.DEFAULT_PERMISSION_MODE``.
+    prompts deadlocks it — see ``manager.DEFAULT_PERMISSION_MODE``. ``persona``
+    (U24) names an entry in ``FleetConfig.personas``; resolved the same way via
+    ``FleetConfig.persona_for``.
     """
 
     run_mode: RunMode | None = None
@@ -272,6 +296,14 @@ class ProjectDefaults(_StrictModel):
     permission_mode: str | None = None
     gate_policy: GatePolicy | None = None
     backend: BackendConfig | None = None
+    persona: str | None = None
+
+    @field_validator("persona")
+    @classmethod
+    def _persona_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("persona must not be blank when set")
+        return value.strip() if value is not None else value
 
     @field_validator("permission_mode")
     @classmethod
@@ -407,6 +439,16 @@ class FleetConfig(_StrictModel):
     permission_mode: str = DEFAULT_PERMISSION_MODE
     run_mode: RunMode = DEFAULT_RUN_MODE
     backend: BackendConfig = Field(default_factory=BackendConfig)
+    model: str | None = None
+    personas: list[PersonaConfig] = Field(default_factory=list)
+    persona: str | None = None
+
+    @field_validator("persona")
+    @classmethod
+    def _persona_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("persona must not be blank when set")
+        return value.strip() if value is not None else value
 
     @field_validator("permission_mode")
     @classmethod
@@ -432,6 +474,31 @@ class FleetConfig(_StrictModel):
         dupes = sorted({name for name in names if names.count(name) > 1})
         if dupes:
             raise ValueError(f"duplicate project names: {dupes}")
+        return self
+
+    @model_validator(mode="after")
+    def _unique_persona_names(self) -> FleetConfig:
+        names = [persona.name for persona in self.personas]
+        dupes = sorted({name for name in names if names.count(name) > 1})
+        if dupes:
+            raise ValueError(f"duplicate persona names: {dupes}")
+        return self
+
+    @model_validator(mode="after")
+    def _persona_references_exist(self) -> FleetConfig:
+        known = {persona.name for persona in self.personas}
+        referenced: list[str] = []
+        if self.persona is not None:
+            referenced.append(self.persona)
+        for project in self.projects:
+            if project.defaults.persona is not None:
+                referenced.append(project.defaults.persona)
+        unknown = sorted({name for name in referenced if name not in known})
+        if unknown:
+            raise ValueError(
+                f"persona reference(s) not defined in fleet.personas: {unknown}; "
+                f"available: {sorted(known)}"
+            )
         return self
 
     def project(self, name: str) -> ProjectConfig:
@@ -497,6 +564,46 @@ class FleetConfig(_StrictModel):
             return override
         project_override = self.project(name).defaults.backend
         return project_override if project_override is not None else self.backend
+
+    def model_for(self, name: str, *, override: str | None = None) -> str | None:
+        """Effective spawn ``--model`` for a project (U24).
+
+        Precedence (highest first), mirroring ``run_mode``/``permission_mode``:
+        an explicit per-worker *override* (spawn call site / voice), then the
+        project's ``defaults.model``, then the fleet-wide ``model``. ``None``
+        at every level means "let the ``claude`` CLI pick its own default".
+        """
+        if override is not None:
+            return override
+        project_override = self.project(name).defaults.model
+        return project_override if project_override is not None else self.model
+
+    def persona_for(
+        self, name: str, *, override: str | None = None
+    ) -> Optional[PersonaConfig]:
+        """Effective :class:`PersonaConfig` for a project, or ``None`` (U24).
+
+        Precedence (highest first), mirroring ``backend_for``: an explicit
+        per-worker *override* (a persona *name*, resolved against
+        ``self.personas``), then the project's ``defaults.persona``, then the
+        fleet-wide ``persona``. Returns ``None`` when no persona is configured
+        at any level — the app's single locked profile keeps applying.
+        ``_persona_references_exist`` guarantees any name that reaches here is
+        registered in ``self.personas``, except a caller-supplied *override*,
+        which is looked up the same way and raises ``KeyError`` if unknown.
+        """
+        resolved_name = override
+        if resolved_name is None:
+            resolved_name = self.project(name).defaults.persona
+        if resolved_name is None:
+            resolved_name = self.persona
+        if resolved_name is None:
+            return None
+        for persona in self.personas:
+            if persona.name == resolved_name:
+                return persona
+        available = sorted(p.name for p in self.personas)
+        raise KeyError(f"no persona named {resolved_name!r}; available: {available}")
 
 
 def gate_trigger_of(status: ManagerStatus) -> str | None:

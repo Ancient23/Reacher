@@ -424,6 +424,75 @@ def test_post_control_missing_key_400() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Fleet settings panel (U24: customization polish)
+# ---------------------------------------------------------------------------
+
+
+def test_settings_panel_empty_without_projects() -> None:
+    from reachy_fleet_supervisor.fleet import FleetConfig, render_settings_panel
+
+    assert render_settings_panel(FleetConfig()) == ""
+
+
+def test_settings_panel_shows_effective_per_project_config() -> None:
+    from reachy_fleet_supervisor.fleet import parse_fleet_config, render_settings_panel
+
+    cfg = parse_fleet_config(
+        {
+            "model": "claude-opus-4",
+            "personas": [{"name": "captain", "voice": "verse"}],
+            "persona": "captain",
+            "projects": [
+                {"name": "reacher", "path": "/tmp/reacher"},
+                {
+                    "name": "ollama_proj",
+                    "path": "/tmp/o",
+                    "defaults": {
+                        "model": "local-model",
+                        "backend": {"kind": "ollama", "ollama": {"base_url": "http://x"}},
+                    },
+                },
+            ],
+        }
+    )
+    html = render_settings_panel(cfg)
+    assert "reacher" in html
+    assert "claude-opus-4" in html
+    assert "captain" in html
+    assert "ollama_proj" in html
+    assert "local-model" in html
+    assert "ollama" in html
+
+
+def test_settings_panel_escapes_html_in_names() -> None:
+    from reachy_fleet_supervisor.fleet import FleetConfig, ProjectConfig, render_settings_panel
+
+    cfg = FleetConfig(projects=[ProjectConfig(name="<b>evil</b>", path="/tmp/x")])
+    html = render_settings_panel(cfg)
+    assert "<b>evil</b>" not in html
+    assert "&lt;b&gt;evil&lt;/b&gt;" in html
+
+
+def test_index_includes_settings_panel_when_fleet_config_given() -> None:
+    from reachy_fleet_supervisor.fleet import parse_fleet_config
+
+    cfg = parse_fleet_config({"projects": [{"name": "reacher", "path": "/tmp/reacher"}]})
+    state = _state_with()
+    client = TestClient(create_dashboard_app(state, fleet_config=cfg))
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "fleet settings" in resp.text
+    assert "reacher" in resp.text
+
+
+def test_index_omits_settings_panel_without_fleet_config() -> None:
+    state = _state_with()
+    client = TestClient(create_dashboard_app(state))
+    resp = client.get("/")
+    assert "fleet settings" not in resp.text
+
+
+# ---------------------------------------------------------------------------
 # Integration — a REAL background session rendered through the dashboard
 # ---------------------------------------------------------------------------
 

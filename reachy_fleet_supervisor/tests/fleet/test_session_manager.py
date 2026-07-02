@@ -305,6 +305,32 @@ def test_spawn_project_materializes_mcp_config_and_resolves_defaults(
     }
 
 
+def test_spawn_project_resolves_fleet_wide_model_default(tmp_path, monkeypatch) -> None:
+    """spawn_project() falls back to the fleet-wide model when the project sets none (U24).
+
+    Regression: pre-U24 this read ``project.defaults.model`` directly, which
+    silently dropped a fleet-wide ``model`` default for any project that didn't
+    override it. Now it goes through ``FleetConfig.model_for``.
+    """
+    cfg = parse_fleet_config(
+        {
+            "model": "claude-opus-4",
+            "projects": [{"name": "plain", "path": str(tmp_path / "repo")}],
+        }
+    )
+
+    captured: dict = {}
+
+    def fake_spawn(cls, task, *, name, claude_bin="claude", **kwargs):
+        captured.update(kwargs)
+        return _handle("cccc3333", name)
+
+    monkeypatch.setattr(sm_mod.FleetManager, "spawn", classmethod(fake_spawn))
+    sm = SessionManager()
+    sm.spawn_project(cfg, "plain", "task", name="w", mcp_config_dir=tmp_path / "mcp")
+    assert captured["model"] == "claude-opus-4"
+
+
 def test_spawn_project_without_mcp_servers_passes_none(tmp_path, monkeypatch) -> None:
     """A project with no mcp[] spawns with an empty mcp_configs list — no hard dependency."""
     cfg = parse_fleet_config(

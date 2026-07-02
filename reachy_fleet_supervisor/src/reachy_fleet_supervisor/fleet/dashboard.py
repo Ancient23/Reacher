@@ -33,6 +33,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from .cli import _snapshot_dict  # single serialization source shared with the CLI
 from .state import FleetState, FleetSnapshot, ManagerSnapshot
 from .control import CONTROL_ACTIONS, FleetController
+from .config import FleetConfig
 
 
 # Default browser poll cadence (ms). Matches the FleetPoller's ~2 s server cadence.
@@ -126,15 +127,65 @@ def render_cards(snapshot: FleetSnapshot, *, controls: bool = False) -> str:
     return "\n".join(_render_card(m, controls=controls) for m in snapshot.managers)
 
 
+def render_settings_panel(fleet_config: FleetConfig) -> str:
+    """Render a read-only per-project settings table (U24: customization polish).
+
+    Shows the EFFECTIVE (already-resolved, override>project>fleet) model, run
+    mode, permission mode, backend, and persona for every configured project —
+    reusing the same resolvers ``spawn_project`` uses (``model_for``,
+    ``run_mode_for``, ``permission_mode_for``, ``backend_for``, ``persona_for``)
+    so this panel can never drift from what actually gets spawned. Read-only:
+    no editing here, this unit only surfaces the effective config for a human
+    to sanity-check; editing the fleet config file is still the mechanism.
+    """
+    if not fleet_config.projects:
+        return ""
+    rows = []
+    for project in fleet_config.projects:
+        model = fleet_config.model_for(project.name) or "(cli default)"
+        run_mode = fleet_config.run_mode_for(project.name)
+        permission_mode = fleet_config.permission_mode_for(project.name)
+        backend = fleet_config.backend_for(project.name)
+        persona = fleet_config.persona_for(project.name)
+        rows.append(
+            "        <tr>"
+            f"<td>{_esc(project.name)}</td>"
+            f"<td>{_esc(model)}</td>"
+            f"<td>{_esc(run_mode)}</td>"
+            f"<td>{_esc(permission_mode)}</td>"
+            f"<td>{_esc(backend.kind)}</td>"
+            f"<td>{_esc(persona.name if persona is not None else '(default)')}</td>"
+            "</tr>"
+        )
+    return f"""  <details id="settings">
+    <summary>fleet settings ({len(fleet_config.projects)} project(s))</summary>
+    <table class="settings-table">
+      <thead><tr><th>project</th><th>model</th><th>run mode</th>
+        <th>permission</th><th>backend</th><th>persona</th></tr></thead>
+      <tbody>
+{chr(10).join(rows)}
+      </tbody>
+    </table>
+  </details>"""
+
+
 def render_page(
-    snapshot: FleetSnapshot, *, title: str, poll_ms: int, controls: bool = False
+    snapshot: FleetSnapshot,
+    *,
+    title: str,
+    poll_ms: int,
+    controls: bool = False,
+    settings_html: str = "",
 ) -> str:
     """Render the complete dashboard HTML document for *snapshot*.
 
     When *controls* is true each card gains an interactive control row (send /
     pause / resume / kill, U12) and the page wires the buttons to
     ``POST /api/control/<action>``. When false, NO control markup or wiring is
-    shipped (the Phase-2 read-only dashboard).
+    shipped (the Phase-2 read-only dashboard). *settings_html* (U24), when
+    non-empty, is injected as a collapsed panel above the card grid — see
+    :func:`render_settings_panel`; empty string (default / no fleet config
+    supplied) renders nothing, so this is fully backward compatible.
     """
     # The JS card() builder injects this per card. Single (not doubled) braces:
     # it is interpolated as a VALUE into the f-string, so `${id}` is the runtime
@@ -209,10 +260,16 @@ def render_page(
                    color: #888; max-height: 8rem; overflow: auto; }}
     .ctl-result.err {{ color: #c62828; }}
     .empty {{ color: #888; }}
+    #settings {{ margin-bottom: .75rem; }}
+    #settings summary {{ cursor: pointer; font-size: .85rem; color: #888; }}
+    .settings-table {{ border-collapse: collapse; margin-top: .5rem; font-size: .78rem; }}
+    .settings-table th, .settings-table td {{ text-align: left; padding: .2rem .6rem .2rem 0; }}
+    .settings-table th {{ color: #888; font-weight: 600; }}
   </style>
 </head>
 <body>
   <h1>{_esc(title)} <span class="muted" id="meta"></span></h1>
+{settings_html}
   <div id="grid">
 {render_cards(snapshot, controls=controls)}
   </div>
@@ -352,6 +409,7 @@ def create_dashboard_app(
     poll_ms: int = DEFAULT_POLL_MS,
     on_request: Optional[RefreshHook] = None,
     controller: Optional[FleetController] = None,
+    fleet_config: Optional[FleetConfig] = None,
 ) -> FastAPI:
     """Build the FleetState dashboard as a :class:`FastAPI` app.
 
@@ -368,9 +426,16 @@ def create_dashboard_app(
     :class:`~reachy_fleet_supervisor.fleet.control.FleetController`. Without a
     controller the dashboard stays read-only (decision #21 — the Phase-2
     behavior). Mount onto the Reachy Mini settings app or run via uvicorn.
+
+    If *fleet_config* is given, a collapsed "fleet settings" panel is rendered
+    above the grid (U24: customization polish) showing the effective
+    per-project model / run mode / permission mode / backend / persona — see
+    :func:`render_settings_panel`. Rendered once (the config doesn't change on
+    a poll cycle); omit it to keep the pre-U24 page unchanged.
     """
     app = FastAPI(title=title)
     controls_enabled = controller is not None
+    settings_html = render_settings_panel(fleet_config) if fleet_config is not None else ""
 
     def _current() -> FleetSnapshot:
         if on_request is not None:
@@ -383,7 +448,13 @@ def create_dashboard_app(
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:  # pragma: no cover - exercised via TestClient
         return HTMLResponse(
-            render_page(_current(), title=title, poll_ms=poll_ms, controls=controls_enabled)
+            render_page(
+                _current(),
+                title=title,
+                poll_ms=poll_ms,
+                controls=controls_enabled,
+                settings_html=settings_html,
+            )
         )
 
     @app.get("/api/fleet")

@@ -28,6 +28,7 @@ from reachy_fleet_supervisor.fleet import (
     BackendConfig,
     OllamaBackendConfig,
     DEFAULT_BACKEND_KIND,
+    PersonaConfig,
     backend_env,
     write_backend_settings_file,
 )
@@ -665,3 +666,103 @@ def test_fleet_config_backend_for_precedence(tmp_path: Path) -> None:
     assert cfg.backend_for("overridden").kind == "claude"
     explicit = BackendConfig(kind="claude")
     assert cfg.backend_for("inherits", override=explicit) is explicit
+
+
+# ---------------------------------------------------------------------------
+# Customization: model/persona resolution (U24)
+# ---------------------------------------------------------------------------
+
+
+def test_model_for_precedence(tmp_path: Path) -> None:
+    """model_for: override > project defaults.model > fleet-wide model > None."""
+    cfg = parse_fleet_config(
+        {
+            "model": "claude-opus-4",
+            "projects": [
+                {"name": "inherits", "path": str(tmp_path / "a")},
+                {
+                    "name": "overridden",
+                    "path": str(tmp_path / "b"),
+                    "defaults": {"model": "claude-haiku-4"},
+                },
+            ],
+        }
+    )
+    assert cfg.model_for("inherits") == "claude-opus-4"
+    assert cfg.model_for("overridden") == "claude-haiku-4"
+    assert cfg.model_for("inherits", override="claude-sonnet-4-6") == "claude-sonnet-4-6"
+
+
+def test_model_for_defaults_to_none() -> None:
+    cfg = FleetConfig(projects=[ProjectConfig(name="p", path="/x")])
+    assert cfg.model_for("p") is None
+
+
+def test_persona_config_name_not_blank() -> None:
+    with pytest.raises(ValueError):
+        PersonaConfig(name="   ")
+
+
+def test_persona_references_must_be_defined(tmp_path: Path) -> None:
+    with pytest.raises(FleetConfigError):
+        parse_fleet_config(
+            {
+                "personas": [{"name": "captain"}],
+                "projects": [
+                    {
+                        "name": "p",
+                        "path": str(tmp_path),
+                        "defaults": {"persona": "no-such-persona"},
+                    }
+                ],
+            }
+        )
+
+
+def test_fleet_wide_persona_reference_must_be_defined() -> None:
+    with pytest.raises(ValueError):
+        FleetConfig(persona="ghost")
+
+
+def test_duplicate_persona_names_rejected() -> None:
+    with pytest.raises(ValueError):
+        FleetConfig(personas=[{"name": "captain"}, {"name": "captain"}])
+
+
+def test_persona_for_precedence(tmp_path: Path) -> None:
+    """persona_for: override > project defaults.persona > fleet persona > None."""
+    cfg = parse_fleet_config(
+        {
+            "personas": [
+                {"name": "captain", "voice": "verse"},
+                {"name": "first-mate", "instructions": "terse, technical"},
+            ],
+            "persona": "captain",
+            "projects": [
+                {"name": "inherits", "path": str(tmp_path / "a")},
+                {
+                    "name": "overridden",
+                    "path": str(tmp_path / "b"),
+                    "defaults": {"persona": "first-mate"},
+                },
+            ],
+        }
+    )
+    assert cfg.persona_for("inherits").name == "captain"
+    assert cfg.persona_for("inherits").voice == "verse"
+    assert cfg.persona_for("overridden").name == "first-mate"
+    assert cfg.persona_for("overridden", override="captain").name == "captain"
+
+
+def test_persona_for_defaults_to_none() -> None:
+    cfg = FleetConfig(projects=[ProjectConfig(name="p", path="/x")])
+    assert cfg.persona_for("p") is None
+
+
+def test_persona_for_unknown_override_raises() -> None:
+    cfg = FleetConfig(
+        personas=[PersonaConfig(name="captain")],
+        projects=[ProjectConfig(name="p", path="/x")],
+    )
+    with pytest.raises(KeyError):
+        cfg.persona_for("p", override="ghost")

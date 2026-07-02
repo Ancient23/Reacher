@@ -86,6 +86,7 @@ from .config import (
     CodingBackendKind,
     OllamaBackendConfig,
     DEFAULT_BACKEND_KIND,
+    PersonaConfig,
     classify_status,
     gate_trigger_of,
     load_fleet_config,
@@ -171,6 +172,7 @@ from .dashboard import (
     render_page,
     snapshot_payload,
     create_dashboard_app,
+    render_settings_panel,
 )
 from .session_manager import (
     AgentPredicate,
@@ -258,6 +260,8 @@ __all__ = [
     "DEFAULT_BACKEND_KIND",
     "backend_env",
     "write_backend_settings_file",
+    # customization (U24)
+    "PersonaConfig",
     # manager (U2)
     "FleetManager",
     "FleetManagerError",
@@ -352,6 +356,7 @@ __all__ = [
     "render_page",
     "snapshot_payload",
     "DEFAULT_POLL_MS",
+    "render_settings_panel",
     # per-agent identity (U9)
     "AgentColor",
     "PALETTE",
