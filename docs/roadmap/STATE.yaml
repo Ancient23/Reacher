@@ -17,7 +17,7 @@ meta:
 status:
   current_phase: 4
   next_unit: U20
-  in_progress: U17
+  in_progress: U20   # U17 stays gated via pending_gate (deferred by human 2026-07-02)
   failure_count: 0
   units_done: 18
   units_total: 26
