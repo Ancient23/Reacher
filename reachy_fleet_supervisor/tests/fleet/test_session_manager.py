@@ -20,6 +20,7 @@ from reachy_fleet_supervisor.fleet import (
     FleetConfig,
     FleetManager,
     FleetManagerError,
+    RetryPolicy,
     SessionManager,
     parse_fleet_config,
 )
@@ -446,3 +447,144 @@ def test_real_reconnect_after_restart(tmp_path) -> None:
                 if a.session_id == mgr.session_id
             ]
             assert remaining == [], f"manager {mgr.session_id} still active after teardown"
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit backoff + recovery wiring (U23)
+# ---------------------------------------------------------------------------
+
+
+def test_spawn_retries_on_rate_limit_then_succeeds(monkeypatch) -> None:
+    """spawn() retries a rate-limit-shaped FleetManager.spawn error with backoff.
+
+    ``base_delay=0.0`` keeps the real (unmocked) ``time.sleep`` calls instant.
+    """
+    calls = {"n": 0}
+
+    def fake_spawn(cls, task, *, name, claude_bin="claude", **kwargs):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise FleetManagerError("429 too many requests — rate limit")
+        return _handle("cccc3333", name)
+
+    monkeypatch.setattr(sm_mod.FleetManager, "spawn", classmethod(fake_spawn))
+
+    sm = SessionManager()
+    mgr = sm.spawn(
+        "task",
+        name="flaky",
+        retry_policy=RetryPolicy(max_attempts=5, base_delay=0.0, jitter=0.0),
+    )
+    assert mgr.id == "cccc3333"
+    assert calls["n"] == 3
+
+
+def test_spawn_does_not_retry_non_rate_limit_error(monkeypatch) -> None:
+    calls = {"n": 0}
+
+    def fake_spawn(cls, task, *, name, claude_bin="claude", **kwargs):
+        calls["n"] += 1
+        raise FleetManagerError("manager task/prompt must not be empty")
+
+    monkeypatch.setattr(sm_mod.FleetManager, "spawn", classmethod(fake_spawn))
+    sm = SessionManager()
+    with pytest.raises(FleetManagerError, match="must not be empty"):
+        sm.spawn("task", name="bad", retry_policy=RetryPolicy(max_attempts=5))
+    assert calls["n"] == 1
+
+
+def test_spawn_retry_policy_none_disables_retry(monkeypatch) -> None:
+    calls = {"n": 0}
+
+    def fake_spawn(cls, task, *, name, claude_bin="claude", **kwargs):
+        calls["n"] += 1
+        raise FleetManagerError("rate limit exceeded")
+
+    monkeypatch.setattr(sm_mod.FleetManager, "spawn", classmethod(fake_spawn))
+    sm = SessionManager()
+    with pytest.raises(FleetManagerError, match="rate limit"):
+        sm.spawn("task", name="once", retry_policy=None)
+    assert calls["n"] == 1
+
+
+def test_send_message_retries_on_rate_limit(monkeypatch) -> None:
+    handle = _handle("dddd4444", "worker")
+    calls = {"n": 0}
+
+    def fake_send(self, message, **kwargs):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise FleetManagerError("overloaded, please retry")
+        return "reply"
+
+    monkeypatch.setattr(sm_mod.FleetManager, "send_message", fake_send)
+    sm = SessionManager()
+    sm.adopt(handle)
+    result = sm.send_message(
+        "worker", "hello", retry_policy=RetryPolicy(max_attempts=3, base_delay=0.0, jitter=0.0)
+    )
+    assert result == "reply"
+    assert calls["n"] == 2
+
+
+def test_health_classifies_from_manager_info(monkeypatch) -> None:
+    handle = _handle("eeee5555", "worker")
+    monkeypatch.setattr(
+        sm_mod.FleetManager, "info",
+        lambda self, **kwargs: AgentInfo(session_id=self.session_id, id=self.id, state="failed"),
+    )
+    sm = SessionManager()
+    sm.adopt(handle)
+    health = sm.health("worker")
+    assert health.status == "recoverable"
+    assert health.needs_recovery is True
+
+
+def test_recover_respawns_a_recoverable_manager(monkeypatch) -> None:
+    handle = _handle("ffff7777", "worker")
+    resumed = {"n": 0}
+    monkeypatch.setattr(
+        sm_mod.FleetManager, "info",
+        lambda self, **kwargs: AgentInfo(session_id=self.session_id, id=self.id, state="stopped"),
+    )
+
+    def fake_resume(self, **kwargs):
+        resumed["n"] += 1
+
+    monkeypatch.setattr(sm_mod.FleetManager, "resume", fake_resume)
+    sm = SessionManager()
+    sm.adopt(handle)
+    assert sm.recover("worker") is True
+    assert resumed["n"] == 1
+
+
+def test_recover_is_noop_for_healthy_manager(monkeypatch) -> None:
+    handle = _handle("gggg8888", "worker")
+    monkeypatch.setattr(
+        sm_mod.FleetManager, "info",
+        lambda self, **kwargs: AgentInfo(session_id=self.session_id, id=self.id, state="working"),
+    )
+    resumed = {"n": 0}
+    monkeypatch.setattr(sm_mod.FleetManager, "resume", lambda self, **k: resumed.__setitem__("n", resumed["n"] + 1))
+    sm = SessionManager()
+    sm.adopt(handle)
+    assert sm.recover("worker") is False
+    assert resumed["n"] == 0
+
+
+def test_recover_all_sweeps_every_tracked_manager(monkeypatch) -> None:
+    healthy = _handle("h0000001", "healthy-one")
+    recoverable = _handle("h0000002", "recoverable-one")
+
+    def fake_info(self, **kwargs):
+        state = "working" if self.id == "h0000001" else "failed"
+        return AgentInfo(session_id=self.session_id, id=self.id, state=state)
+
+    monkeypatch.setattr(sm_mod.FleetManager, "info", fake_info)
+    monkeypatch.setattr(sm_mod.FleetManager, "resume", lambda self, **k: None)
+
+    sm = SessionManager()
+    sm.adopt(healthy)
+    sm.adopt(recoverable)
+    recovered = sm.recover_all()
+    assert recovered == ["h0000002"]

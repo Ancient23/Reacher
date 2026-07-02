@@ -35,6 +35,14 @@ from .manager import (
     FleetManagerError,
     list_agents,
 )
+from .resilience import (
+    DEFAULT_RETRY_POLICY,
+    ManagerHealth,
+    RetryPolicy,
+    classify_manager_health,
+    recover_manager,
+    retry_call,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard, types only
     from .config import BackendConfig, FleetConfig
@@ -148,6 +156,7 @@ class SessionManager:
         mcp_configs: Sequence[str] = (),
         worktree: Optional[str | bool] = None,
         extra_args: Sequence[str] = (),
+        retry_policy: Optional[RetryPolicy] = DEFAULT_RETRY_POLICY,
         **spawn_kwargs: Any,
     ) -> FleetManager:
         """Spawn a new manager (in *run_mode*) and track it.
@@ -158,24 +167,42 @@ class SessionManager:
         pass through to :meth:`FleetManager.spawn` (e.g. ``launcher`` /
         ``remote_control_name_prefix`` for remote-control). The new handle is
         registered and returned.
+
+        U23 (rate-limit + robustness hardening): N managers can share the same
+        Claude Max usage pool, so a spawn can transiently come back rate-limited
+        even though it's a perfectly valid call. By default (``retry_policy``
+        left at :data:`~.resilience.DEFAULT_RETRY_POLICY`) a rate-limit-shaped
+        :class:`FleetManagerError` (:func:`~.resilience.is_rate_limit_error`) is
+        retried with exponential backoff via
+        :func:`~.resilience.retry_call`; any other error (bad argv, missing
+        binary, …) still fails immediately. Pass ``retry_policy=None`` to opt out
+        (the pre-U23 behavior: exactly one attempt).
         """
         if any(m.name == name for m in self._by_id.values()):
             raise FleetManagerError(
                 f"a manager named {name!r} is already tracked; pick a unique name"
             )
-        manager = FleetManager.spawn(
-            task,
-            name=name,
-            cwd=cwd,
-            session_id=session_id,
-            run_mode=run_mode,
-            permission_mode=permission_mode,
-            model=model,
-            mcp_configs=mcp_configs,
-            worktree=worktree,
-            extra_args=extra_args,
-            claude_bin=self.claude_bin,
-            **spawn_kwargs,  # e.g. timeout / resolve_retries / launcher
+
+        def _do_spawn() -> FleetManager:
+            return FleetManager.spawn(
+                task,
+                name=name,
+                cwd=cwd,
+                session_id=session_id,
+                run_mode=run_mode,
+                permission_mode=permission_mode,
+                model=model,
+                mcp_configs=mcp_configs,
+                worktree=worktree,
+                extra_args=extra_args,
+                claude_bin=self.claude_bin,
+                **spawn_kwargs,  # e.g. timeout / resolve_retries / launcher
+            )
+
+        manager = (
+            retry_call(_do_spawn, policy=retry_policy)
+            if retry_policy is not None
+            else _do_spawn()
         )
         return self.adopt(manager)
 
@@ -318,14 +345,26 @@ class SessionManager:
 
     # ---- interactive steering (U12) --------------------------------------
 
-    def send_message(self, key: str, message: str, **kwargs: Any) -> Any:
+    def send_message(
+        self,
+        key: str,
+        message: str,
+        *,
+        retry_policy: Optional[RetryPolicy] = DEFAULT_RETRY_POLICY,
+        **kwargs: Any,
+    ) -> Any:
         """Steer one tracked manager (send / approve gate / reassign).
 
         Delegates to :meth:`FleetManager.send_message` (the decision #16
         ``claude --resume <id> -p`` path for background managers). Returns the
         completed process (its ``stdout`` is the manager's reply).
+
+        U23: retried with backoff on a rate-limit-shaped error, same policy as
+        :meth:`spawn` (pass ``retry_policy=None`` to opt out).
         """
-        return self.require(key).send_message(message, **kwargs)
+        manager = self.require(key)
+        call = lambda: manager.send_message(message, **kwargs)
+        return retry_call(call, policy=retry_policy) if retry_policy is not None else call()
 
     def pause(self, key: str, *, check: bool = True) -> None:
         """Pause one tracked manager (``claude stop``; conversation kept, resumable)."""
@@ -352,3 +391,56 @@ class SessionManager:
         for manager in list(self._by_id.values()):
             manager.stop_and_remove()
         self._by_id.clear()
+
+    # ---- recovery paths (U23) ----------------------------------------------
+
+    def health(self, key: str) -> ManagerHealth:
+        """Classify one tracked manager's health from its live roster row.
+
+        See :func:`~.resilience.classify_manager_health`: ``"healthy"`` (alive
+        and running), ``"recoverable"`` (roster still has it, but
+        failed/stopped — respawnable), or ``"missing"`` (dropped out of the
+        roster entirely — nothing to respawn from).
+        """
+        manager = self.require(key)
+        return classify_manager_health(manager.info())
+
+    def recover(
+        self,
+        key: str,
+        *,
+        retry_policy: Optional[RetryPolicy] = DEFAULT_RETRY_POLICY,
+    ) -> bool:
+        """Best-effort recovery of one tracked manager that dropped out of "healthy".
+
+        A manager can be killed mid rate-limit collision on the shared Max pool
+        (or otherwise crash) and land in ``failed``/``stopped`` without the human
+        ever asking for that. This resumes it (``claude respawn``, retried with
+        backoff on the same shared pool per *retry_policy*) so the fleet
+        self-heals instead of silently losing a manager. Returns ``True`` if a
+        recovery was attempted, ``False`` if the manager was already healthy or
+        has vanished from the roster entirely (nothing to respawn FROM — the
+        caller must re-:meth:`spawn` a fresh one for that case).
+        """
+        manager = self.require(key)
+        policy = retry_policy if retry_policy is not None else DEFAULT_RETRY_POLICY
+        return recover_manager(manager, policy=policy)
+
+    def recover_all(
+        self,
+        *,
+        retry_policy: Optional[RetryPolicy] = DEFAULT_RETRY_POLICY,
+    ) -> list[str]:
+        """Attempt :meth:`recover` on every tracked manager; return recovered keys.
+
+        Best-effort: one manager's recovery failure (a non-rate-limit error, or
+        retries exhausted) is logged and does not stop the sweep over the rest.
+        """
+        recovered: list[str] = []
+        for manager in list(self._by_id.values()):
+            try:
+                if self.recover(manager.id, retry_policy=retry_policy):
+                    recovered.append(manager.id)
+            except FleetManagerError:
+                logger.exception("recovery of manager '%s' (id=%s) failed", manager.name, manager.id)
+        return recovered

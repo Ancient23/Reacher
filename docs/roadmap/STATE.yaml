@@ -16,10 +16,10 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 4
-  next_unit: U23
+  next_unit: U24
   in_progress: null   # U17 stays gated via pending_gate (deferred by human 2026-07-02)
   failure_count: 0
-  units_done: 20
+  units_done: 21
   deferred_gates:
     # Robot-verification steps recorded but NOT blocking the loop (human choice
     # 2026-07-02: keep making software progress without the robot). Resolve each
@@ -284,6 +284,35 @@ status:
   # tool in the manager's prompt so assessments feed back into its loop.
   # 27 new tests incl. a real-desktop screen-grab smoke test (auto-skips
   # headless); fleet+tools suites 437 green; 0 stray bg agents.
+  #
+  # U22 (Phase 4) PENDING, SKIPPED FOR NOW — needs the 5090 + audio hardware to
+  # build/verify (CUDA Whisper + neural TTS local voice mode); not available on
+  # this machine currently. Left pending, not blocking; U23 done in its place.
+  #
+  # U23 (Phase 4) DONE — rate-limit + robustness hardening for N managers
+  # sharing one Max-plan pool. fleet/resilience.py: is_rate_limit_error (pure
+  # substring classifier over Claude CLI stderr/stdout — "rate limit", "429",
+  # "usage limit", "overloaded", "capacity", "please try again/retry" etc.) +
+  # RetryPolicy (max_attempts/base_delay/max_delay/multiplier/jitter, validated)
+  # + compute_backoff_delay (pure exponential+jitter, capped) + retry_call
+  # (generic retry wrapper: retries ONLY a rate-limit-shaped error with backoff,
+  # any other error fails fast immediately, injectable sleep/rand for
+  # deterministic tests) + classify_manager_health (healthy | recoverable
+  # [roster still lists it failed/stopped] | missing [dropped off the roster
+  # entirely]) + recover_manager (respawns a "recoverable" manager via `claude
+  # respawn`, itself retried through retry_call so a respawn that ALSO hits the
+  # shared pool's rate limit backs off and retries). Wired into
+  # SessionManager.spawn / send_message (retry_policy kwarg, defaults ON,
+  # opt-out with retry_policy=None — pre-U23 behavior unchanged) and new
+  # SessionManager.health/recover/recover_all (best-effort sweep of every
+  # tracked manager, one failure doesn't stop the rest). 46 new tests
+  # (resilience unit tests + SessionManager wiring, all mocked — no real bg
+  # spawns needed since the whole point is the retry/backoff LOGIC). Fleet
+  # suite green (520 passed across the whole software suite; only the 2
+  # pre-existing profile-loading failures remain, unrelated). One stray
+  # u12-steer bg agent left over from a PRIOR iteration's test run was found
+  # via `claude agents --json` and stopped/removed during this iteration's
+  # verification (not created by this unit's tests, which are fully mocked).
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
   - id: U1
@@ -451,7 +480,7 @@ units:
     phase: 4
     title: Rate-limit + robustness hardening
     gate: software
-    status: pending
+    status: done
     deps: [U3]
     acceptance: "Backoff/handling for N managers sharing one Max pool; recovery paths. Tested."
 

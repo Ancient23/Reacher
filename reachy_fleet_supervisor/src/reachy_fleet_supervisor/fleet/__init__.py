@@ -176,6 +176,19 @@ from .session_manager import (
     AgentPredicate,
     SessionManager,
 )
+from .resilience import (
+    RATE_LIMIT_MARKERS,
+    RECOVERABLE_STATES,
+    DEFAULT_RETRY_POLICY,
+    RetryPolicy,
+    ManagerHealth,
+    is_rate_limit_error,
+    is_retryable_exception,
+    compute_backoff_delay,
+    retry_call,
+    classify_manager_health,
+    recover_manager,
+)
 from .voice import (
     VOICE_GATE,
     VOICE_FAILED,
@@ -272,6 +285,18 @@ __all__ = [
     # session manager (U3)
     "SessionManager",
     "AgentPredicate",
+    # rate-limit backoff + recovery (U23)
+    "RATE_LIMIT_MARKERS",
+    "RECOVERABLE_STATES",
+    "DEFAULT_RETRY_POLICY",
+    "RetryPolicy",
+    "ManagerHealth",
+    "is_rate_limit_error",
+    "is_retryable_exception",
+    "compute_backoff_delay",
+    "retry_call",
+    "classify_manager_health",
+    "recover_manager",
     # interactive controls (U12)
     "FleetController",
     "ControlResult",
