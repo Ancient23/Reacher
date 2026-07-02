@@ -322,6 +322,57 @@ def test_spawn_project_without_mcp_servers_passes_none(tmp_path, monkeypatch) ->
     assert captured["mcp_configs"] == []
 
 
+def test_spawn_project_materializes_ollama_backend_settings(tmp_path, monkeypatch) -> None:
+    """spawn_project() writes the effective backend's env to .claude/settings.json (U19)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    cfg = parse_fleet_config(
+        {
+            "projects": [
+                {
+                    "name": "local_proj",
+                    "path": str(repo),
+                    "defaults": {
+                        "backend": {
+                            "kind": "ollama",
+                            "ollama": {"base_url": "http://localhost:11434", "model": "llama3.1"},
+                        }
+                    },
+                }
+            ]
+        }
+    )
+
+    def fake_spawn(cls, task, *, name, claude_bin="claude", **kwargs):
+        return _handle("cccc3333", name)
+
+    monkeypatch.setattr(sm_mod.FleetManager, "spawn", classmethod(fake_spawn))
+    sm = SessionManager()
+    sm.spawn_project(cfg, "local_proj", "task", name="w", mcp_config_dir=tmp_path / "mcp")
+
+    settings_path = repo / ".claude" / "settings.json"
+    assert settings_path.is_file()
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert data["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:11434"
+    assert data["env"]["ANTHROPIC_MODEL"] == "llama3.1"
+
+
+def test_spawn_project_default_backend_writes_no_settings_file(tmp_path, monkeypatch) -> None:
+    """The default 'claude' backend does not create a settings.json override."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    cfg = parse_fleet_config({"projects": [{"name": "plain2", "path": str(repo)}]})
+
+    def fake_spawn(cls, task, *, name, claude_bin="claude", **kwargs):
+        return _handle("dddd4444", name)
+
+    monkeypatch.setattr(sm_mod.FleetManager, "spawn", classmethod(fake_spawn))
+    sm = SessionManager()
+    sm.spawn_project(cfg, "plain2", "task", name="w", mcp_config_dir=tmp_path / "mcp")
+
+    assert not (repo / ".claude" / "settings.json").exists()
+
+
 # ---------------------------------------------------------------------------
 # control (mocked)
 # ---------------------------------------------------------------------------

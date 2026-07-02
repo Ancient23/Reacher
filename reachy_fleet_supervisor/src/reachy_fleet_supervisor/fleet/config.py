@@ -161,6 +161,99 @@ class McpServerConfig(_StrictModel):
         return self
 
 
+class OllamaBackendConfig(_StrictModel):
+    """Connection details for a local-model coding backend (decision #14, option 1).
+
+    Claude Code itself is routed at a local Ollama-served model via
+    ``ANTHROPIC_BASE_URL`` (keeping the same agent loop/tooling; only the brain
+    changes) rather than a native Ollama agent. ``model`` optionally sets
+    ``ANTHROPIC_MODEL`` too, when the local server expects a specific model id.
+    """
+
+    base_url: str = "http://localhost:11434"
+    model: str | None = None
+
+    @field_validator("base_url")
+    @classmethod
+    def _base_url_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("ollama base_url must not be blank")
+        return value.strip()
+
+
+# Which coding backend a worker runs: Claude Code on the Max plan (default) or
+# Claude Code routed at a local Ollama model (decision #14).
+CodingBackendKind = Literal["claude", "ollama"]
+DEFAULT_BACKEND_KIND: CodingBackendKind = "claude"
+
+
+class BackendConfig(_StrictModel):
+    """Per-worker coding backend selection (decision #14).
+
+    ``kind="claude"`` (default) is the Max-plan path — no extra env is needed.
+    ``kind="ollama"`` requires ``ollama`` to be set (the local server's base URL
+    + optional model id), materialized into the *worker's own*
+    ``.claude/settings.json`` ``env`` block at spawn time (a background session
+    has no shell/TTY to inherit `ANTHROPIC_BASE_URL` from, Claude Code
+    2.1.174+ — see :func:`write_backend_settings_file`).
+    """
+
+    kind: CodingBackendKind = DEFAULT_BACKEND_KIND
+    ollama: OllamaBackendConfig | None = None
+
+    @model_validator(mode="after")
+    def _ollama_requires_config(self) -> BackendConfig:
+        if self.kind == "ollama" and self.ollama is None:
+            raise ValueError("backend kind 'ollama' requires an 'ollama' block")
+        return self
+
+
+def backend_env(backend: BackendConfig) -> dict[str, str]:
+    """The env vars *backend* injects into a worker's process (decision #14).
+
+    ``kind="claude"`` needs nothing (returns ``{}``) — the Max-plan default.
+    ``kind="ollama"`` returns ``ANTHROPIC_BASE_URL`` (and ``ANTHROPIC_MODEL``
+    when ``ollama.model`` is set) so Claude Code itself talks to the local
+    server instead of the Anthropic API.
+    """
+    if backend.kind != "ollama" or backend.ollama is None:
+        return {}
+    env = {"ANTHROPIC_BASE_URL": backend.ollama.base_url}
+    if backend.ollama.model:
+        env["ANTHROPIC_MODEL"] = backend.ollama.model
+    return env
+
+
+def write_backend_settings_file(backend: BackendConfig, path: str | Path) -> Optional[Path]:
+    """Merge *backend*'s env into a worker's ``.claude/settings.json`` at *path*.
+
+    Returns ``None`` (writing nothing) for the default ``claude`` backend — no
+    override is needed, matching :func:`write_mcp_config_file`'s "no hard
+    dependency" shape. For an ``ollama`` backend, merges ``backend_env`` into
+    the file's ``env`` object, PRESERVING any other keys already in the file
+    (e.g. permissions) so this never clobbers a worker's existing settings.
+    Creates parent directories and the file itself if absent.
+    """
+    env = backend_env(backend)
+    if not env:
+        return None
+    target = Path(path).expanduser()
+    existing: dict = {}
+    if target.is_file():
+        try:
+            loaded = json.loads(target.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        except json.JSONDecodeError:
+            existing = {}
+    if not isinstance(existing.get("env"), dict):
+        existing["env"] = {}
+    existing["env"].update(env)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    return target
+
+
 class ProjectDefaults(_StrictModel):
     """Per-project default spawn settings, overridable by voice at runtime.
 
@@ -178,6 +271,7 @@ class ProjectDefaults(_StrictModel):
     model: str | None = None
     permission_mode: str | None = None
     gate_policy: GatePolicy | None = None
+    backend: BackendConfig | None = None
 
     @field_validator("permission_mode")
     @classmethod
@@ -283,6 +377,18 @@ class ProjectConfig(_StrictModel):
         """
         return write_mcp_config_file(self.mcp, path)
 
+    def materialize_backend_settings(
+        self, backend: BackendConfig, path: str | Path
+    ) -> Optional[Path]:
+        """Write the effective coding *backend*'s env into this project's settings.
+
+        Thin wrapper around :func:`write_backend_settings_file`. *backend* is
+        the already-resolved effective backend (see ``FleetConfig.backend_for``)
+        — this method doesn't itself do fleet/project precedence, it just
+        materializes.
+        """
+        return write_backend_settings_file(backend, path)
+
 
 class FleetConfig(_StrictModel):
     """The whole fleet config: projects + a default gate policy.
@@ -300,6 +406,7 @@ class FleetConfig(_StrictModel):
     default_gate_policy: GatePolicy = Field(default_factory=GatePolicy)
     permission_mode: str = DEFAULT_PERMISSION_MODE
     run_mode: RunMode = DEFAULT_RUN_MODE
+    backend: BackendConfig = Field(default_factory=BackendConfig)
 
     @field_validator("permission_mode")
     @classmethod
@@ -378,6 +485,18 @@ class FleetConfig(_StrictModel):
         """
         override = self.project(name).defaults.run_mode
         return override if override is not None else self.run_mode
+
+    def backend_for(self, name: str, *, override: BackendConfig | None = None) -> BackendConfig:
+        """Effective coding backend for a project (decision #14).
+
+        Precedence (highest first), mirroring ``run_mode``/``permission_mode``:
+        an explicit per-worker *override* (spawn call site), then the
+        project's ``defaults.backend``, then the fleet-wide ``backend``.
+        """
+        if override is not None:
+            return override
+        project_override = self.project(name).defaults.backend
+        return project_override if project_override is not None else self.backend
 
 
 def gate_trigger_of(status: ManagerStatus) -> str | None:

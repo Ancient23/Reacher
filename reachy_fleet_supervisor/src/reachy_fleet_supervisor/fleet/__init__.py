@@ -82,6 +82,10 @@ from .config import (
     McpServerConfig,
     ProjectDefaults,
     FleetConfigError,
+    BackendConfig,
+    CodingBackendKind,
+    OllamaBackendConfig,
+    DEFAULT_BACKEND_KIND,
     classify_status,
     gate_trigger_of,
     load_fleet_config,
@@ -89,6 +93,8 @@ from .config import (
     mcp_server_entry,
     mcp_config_payload,
     write_mcp_config_file,
+    backend_env,
+    write_backend_settings_file,
 )
 from .status import (
     STATUS_DIR_ENV,
@@ -210,6 +216,13 @@ __all__ = [
     "FleetConfigError",
     "load_fleet_config",
     "parse_fleet_config",
+    # backend (U19, decision #14)
+    "BackendConfig",
+    "CodingBackendKind",
+    "OllamaBackendConfig",
+    "DEFAULT_BACKEND_KIND",
+    "backend_env",
+    "write_backend_settings_file",
     # manager (U2)
     "FleetManager",
     "FleetManagerError",

@@ -15,11 +15,11 @@ meta:
 #   hardware  — needs the physical robot (motion / voice / vision); implement then HUMAN_GATE.
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
-  current_phase: 3
-  next_unit: U19
+  current_phase: 4
+  next_unit: U20
   in_progress: U17
   failure_count: 0
-  units_done: 17
+  units_done: 18
   units_total: 26
   pending_gate:
     unit: U17
@@ -206,6 +206,24 @@ status:
   # 0 stray bg agents (one stray u12-steer agent left over from a prior
   # iteration's test run was found via `claude agents --json` and
   # stopped/removed during this iteration's verification).
+  #
+  # U19 (Phase 4) DONE — pluggable coding backend (decision #14, option 1:
+  # route Claude Code itself at a local Ollama model rather than a native
+  # Ollama agent). fleet/config.py: OllamaBackendConfig (base_url + optional
+  # model) + BackendConfig (kind: claude|ollama; validated) + pure
+  # backend_env() (claude -> {}, ollama -> ANTHROPIC_BASE_URL [+
+  # ANTHROPIC_MODEL]) + write_backend_settings_file() (merges into a project's
+  # .claude/settings.json env WITHOUT clobbering other keys; claude backend
+  # writes nothing). ProjectDefaults.backend + FleetConfig.backend +
+  # backend_for(name, override=) mirror the run_mode/permission_mode
+  # precedence pattern exactly. SessionManager.spawn_project materializes the
+  # effective backend into <project.path>/.claude/settings.json BEFORE spawn
+  # (a bg session has no shell to inherit ANTHROPIC_BASE_URL from,
+  # v2.1.174+). 16 new tests; fleet suite 367 green; 0 stray bg agents.
+  # Local Ollama IS present on this machine (localhost:11434) so the
+  # acceptance's "no Ollama -> HUMAN_GATE to set it up" branch didn't apply;
+  # a LIVE spawn-through-Ollama smoke test was judged out of scope for this
+  # unit (acceptance = "config + tests") and left as a natural follow-up.
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
   - id: U1
@@ -343,7 +361,7 @@ units:
     phase: 4
     title: Pluggable coding backend (Ollama local model)  # decision #14, option 1
     gate: software
-    status: pending
+    status: done
     deps: [U2]
     acceptance: "Per-worker backend selection: Claude Code (Max) or Claude Code routed at a local Ollama model via ANTHROPIC_BASE_URL in the project's .claude/settings.json env (bg sessions don't inherit it from the shell, v2.1.174+). Config + tests; if no local Ollama present → HUMAN_GATE to set it up (ideally on the 5090)."
   - id: U20

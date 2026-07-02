@@ -37,7 +37,7 @@ from .manager import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard, types only
-    from .config import FleetConfig
+    from .config import BackendConfig, FleetConfig
 
 
 logger = logging.getLogger(__name__)
@@ -189,6 +189,7 @@ class SessionManager:
         run_mode: Optional[str] = None,
         permission_mode: Optional[str] = None,
         model: Optional[str] = None,
+        backend: Optional["BackendConfig"] = None,
         mcp_config_dir: Optional[str | Path] = None,
         extra_mcp_configs: Sequence[str] = (),
         worktree: Optional[str | bool] = None,
@@ -212,6 +213,13 @@ class SessionManager:
         dir (``<tmp>/reachy-fleet-mcp/<project>.mcp.json``) so repeated spawns of
         the same project reuse/overwrite the same materialized file rather than
         littering new ones.
+
+        The effective coding *backend* (Claude Max plan, or Claude Code routed
+        at a local Ollama model — ``FleetConfig.backend_for``, decision #14) is
+        materialized into the project's own ``<path>/.claude/settings.json``
+        ``env`` block BEFORE spawn, since a background session has no shell to
+        inherit ``ANTHROPIC_BASE_URL`` from. The default ``claude`` backend
+        writes nothing (no override needed).
         """
         project = fleet_config.project(project_name)
         effective_run_mode = run_mode if run_mode is not None else fleet_config.run_mode_for(project_name)
@@ -221,6 +229,10 @@ class SessionManager:
             else fleet_config.permission_mode_for(project_name)
         )
         effective_model = model if model is not None else project.defaults.model
+        effective_backend = fleet_config.backend_for(project_name, override=backend)
+        project.materialize_backend_settings(
+            effective_backend, project.path / ".claude" / "settings.json"
+        )
 
         config_dir = (
             Path(mcp_config_dir)

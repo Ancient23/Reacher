@@ -25,6 +25,11 @@ from reachy_fleet_supervisor.fleet import (
     write_mcp_config_file,
     SENTINEL_HUMAN_GATE,
     SENTINEL_COMPLETE,
+    BackendConfig,
+    OllamaBackendConfig,
+    DEFAULT_BACKEND_KIND,
+    backend_env,
+    write_backend_settings_file,
 )
 
 
@@ -556,3 +561,107 @@ def test_project_materialize_mcp_config(tmp_path: Path) -> None:
     out = project.materialize_mcp_config(tmp_path / "unreal_proj.mcp.json")
     assert out is not None and out.is_file()
     assert json.loads(out.read_text(encoding="utf-8"))["mcpServers"]["unreal"]["command"] == "uv"
+
+
+# ---------------------------------------------------------------------------
+# Pluggable coding backend (U19, decision #14)
+# ---------------------------------------------------------------------------
+
+
+def test_backend_defaults_to_claude() -> None:
+    """A bare BackendConfig / fleet default is the Max-plan 'claude' backend."""
+    backend = BackendConfig()
+    assert backend.kind == DEFAULT_BACKEND_KIND == "claude"
+    assert backend.ollama is None
+    assert FleetConfig().backend.kind == "claude"
+
+
+def test_ollama_backend_requires_ollama_block() -> None:
+    """kind='ollama' without an 'ollama' block is invalid config."""
+    with pytest.raises(ValueError):
+        BackendConfig(kind="ollama")
+
+
+def test_ollama_base_url_not_blank() -> None:
+    with pytest.raises(ValueError):
+        OllamaBackendConfig(base_url="   ")
+
+
+def test_backend_env_claude_is_empty() -> None:
+    """The default backend needs no env override."""
+    assert backend_env(BackendConfig()) == {}
+
+
+def test_backend_env_ollama_sets_base_url_and_optional_model() -> None:
+    backend = BackendConfig(kind="ollama", ollama=OllamaBackendConfig(base_url="http://localhost:11434"))
+    assert backend_env(backend) == {"ANTHROPIC_BASE_URL": "http://localhost:11434"}
+
+    backend_with_model = BackendConfig(
+        kind="ollama",
+        ollama=OllamaBackendConfig(base_url="http://localhost:11434", model="llama3.1"),
+    )
+    assert backend_env(backend_with_model) == {
+        "ANTHROPIC_BASE_URL": "http://localhost:11434",
+        "ANTHROPIC_MODEL": "llama3.1",
+    }
+
+
+def test_write_backend_settings_file_claude_writes_nothing(tmp_path: Path) -> None:
+    target = tmp_path / ".claude" / "settings.json"
+    assert write_backend_settings_file(BackendConfig(), target) is None
+    assert not target.exists()
+
+
+def test_write_backend_settings_file_ollama_creates_file(tmp_path: Path) -> None:
+    target = tmp_path / ".claude" / "settings.json"
+    backend = BackendConfig(kind="ollama", ollama=OllamaBackendConfig(base_url="http://host:1234"))
+    result = write_backend_settings_file(backend, target)
+    assert result == target
+    assert target.is_file()
+    data = json.loads(target.read_text(encoding="utf-8"))
+    assert data["env"]["ANTHROPIC_BASE_URL"] == "http://host:1234"
+
+
+def test_write_backend_settings_file_preserves_existing_keys(tmp_path: Path) -> None:
+    """Merging into an existing settings.json must not clobber other keys/env."""
+    target = tmp_path / ".claude" / "settings.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        json.dumps({"permissions": {"allow": ["Bash"]}, "env": {"MY_VAR": "1"}}),
+        encoding="utf-8",
+    )
+    backend = BackendConfig(kind="ollama", ollama=OllamaBackendConfig(base_url="http://host:1234"))
+    write_backend_settings_file(backend, target)
+    data = json.loads(target.read_text(encoding="utf-8"))
+    assert data["permissions"] == {"allow": ["Bash"]}
+    assert data["env"]["MY_VAR"] == "1"
+    assert data["env"]["ANTHROPIC_BASE_URL"] == "http://host:1234"
+
+
+def test_project_materialize_backend_settings(tmp_path: Path) -> None:
+    project = ProjectConfig(name="p", path="/x")
+    backend = BackendConfig(kind="ollama", ollama=OllamaBackendConfig(base_url="http://host:1234"))
+    out = project.materialize_backend_settings(backend, tmp_path / "settings.json")
+    assert out is not None and out.is_file()
+
+
+def test_fleet_config_backend_for_precedence(tmp_path: Path) -> None:
+    """backend_for: override > project defaults.backend > fleet default."""
+    ollama_backend = {"kind": "ollama", "ollama": {"base_url": "http://localhost:11434"}}
+    cfg = parse_fleet_config(
+        {
+            "backend": ollama_backend,
+            "projects": [
+                {"name": "inherits", "path": str(tmp_path / "a")},
+                {
+                    "name": "overridden",
+                    "path": str(tmp_path / "b"),
+                    "defaults": {"backend": {"kind": "claude"}},
+                },
+            ],
+        }
+    )
+    assert cfg.backend_for("inherits").kind == "ollama"
+    assert cfg.backend_for("overridden").kind == "claude"
+    explicit = BackendConfig(kind="claude")
+    assert cfg.backend_for("inherits", override=explicit) is explicit
