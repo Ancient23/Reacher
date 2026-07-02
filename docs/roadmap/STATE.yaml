@@ -16,10 +16,10 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 5
-  next_unit: U25
+  next_unit: U26
   in_progress: null   # U17 stays gated via pending_gate (deferred by human 2026-07-02)
   failure_count: 0
-  units_done: 22
+  units_done: 23
   deferred_gates:
     # Robot-verification steps recorded but NOT blocking the loop (human choice
     # 2026-07-02: keep making software progress without the robot). Resolve each
@@ -379,6 +379,37 @@ status:
   # polish (dashboard settings panel) is HTML-only, not yet human-eyeballed;
   # noted as a light, non-blocking deferred_gates entry below. units_done
   # 21->22, current_phase 4->5.
+  #
+  # U25 (Phase 5) DONE — fleet skill (decision #18): a drive-loop variant
+  # installed into manager sessions. fleet/skill.py: FLEET_SKILL_NAME
+  # ("fleet-conventions") + build_fleet_skill_markdown (pure builder —
+  # frontmatter + the three decision-#18 conventions: (1) orchestrate via
+  # subagents/Workflows, one PR-sized unit per fresh-context iteration,
+  # durable committed git state; (2) keep spoken replies short — the status
+  # "summary" line IS a candidate for Reachy to speak aloud, so one natural
+  # sentence; (3) escalate HUMAN_GATE by voice THROUGH the status file — the
+  # exact status.json path + sentinel vocabulary are baked in, matching
+  # build_drive_task, and the skill says never invent a separate escalation
+  # channel; optional vision-tool clause when DriveLoopSpec.vision_command is
+  # set) + fleet_skill_path (<repo>/.claude/skills/fleet-conventions/SKILL.md)
+  # + write_fleet_skill_file (materializer; supervisor-authored teaching
+  # content so it OVERWRITES by default on each spawn — the opposite of
+  # write_plan_file's no-clobber, since the plan is the MANAGER's committed
+  # output while the skill is ours; overwrite=False preserves a human-edited
+  # copy). Wiring: DriveLoopSpec.install_skill (default True) —
+  # spawn_drive_manager materializes the skill before spawn (mirroring
+  # write_plan_file) and build_drive_task adds a FLEET SKILL prompt clause
+  # pointing at it + telling the manager to teach it to any subagent it
+  # spawns; install_skill=False omits both (fully backward-compatible
+  # otherwise). Exported via fleet/__init__. Tested HEADLESS per acceptance:
+  # 9 new tests (frontmatter, all three conventions + status path + sentinel
+  # in content, vision clause optional, path shape, create + overwrite +
+  # preserve, spawn installs by default + prompt references it, opt-out).
+  # Full software suite (--ignore=tests/vision): 544 passed, 2 failed = the
+  # same known pre-existing profile-loading failures (unrelated). HYGIENE:
+  # `claude agents --json` after the run shows only the 2 interactive human
+  # sessions — 0 stray bg agents. units_done 22->23; next_unit U26 (package
+  # + publish — an APPROVAL gate; deps U24+U25 now both done).
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
   - id: U1
@@ -563,7 +594,8 @@ units:
     phase: 5
     title: Fleet skill (drive-loop variant for managers)  # decision #18
     gate: software
-    status: pending
+    status: done
+    notes: "Done 2026-07-02: fleet/skill.py (build_fleet_skill_markdown + write_fleet_skill_file -> <repo>/.claude/skills/fleet-conventions/SKILL.md) installed by spawn_drive_manager (DriveLoopSpec.install_skill, default True; opt-out tested). Headless: 9 new tests, full suite 544 green."
     deps: [U13]
     acceptance: "A skill installed into manager sessions: orchestrate via subagents/Workflows, short spoken replies, escalate HUMAN_GATE by voice. Tested headless."
   - id: U26

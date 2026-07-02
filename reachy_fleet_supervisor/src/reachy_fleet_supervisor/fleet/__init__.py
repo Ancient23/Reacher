@@ -124,6 +124,12 @@ from .drive import (
     spawn_drive_manager,
     write_plan_file,
 )
+from .skill import (
+    FLEET_SKILL_NAME,
+    build_fleet_skill_markdown,
+    fleet_skill_path,
+    write_fleet_skill_file,
+)
 from .manager import (
     RUN_MODE_ENV,
     VALID_RUN_MODES,
@@ -340,6 +346,11 @@ __all__ = [
     "write_plan_file",
     "DEFAULT_DRIVE_COMMAND",
     "DEFAULT_SENTINEL_PREFIX",
+    # fleet skill (U25)
+    "FLEET_SKILL_NAME",
+    "build_fleet_skill_markdown",
+    "fleet_skill_path",
+    "write_fleet_skill_file",
     "STATUS_FILENAME",
     "STATUS_DIR_ENV",
     "ATTENTION_SENTINELS",

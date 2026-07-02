@@ -37,6 +37,7 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from .status import status_path_for
+from .skill import FLEET_SKILL_NAME, write_fleet_skill_file
 from .manager import (
     DEFAULT_RUN_MODE,
     DEFAULT_PERMISSION_MODE,
@@ -90,6 +91,10 @@ class DriveLoopSpec:
       task prompt advertises it so the manager can run
       ``<vision_command> "<question>"`` via Bash to LOOK at what it built and get
       an assessment back into its loop. ``None`` (default) = no vision clause.
+    - ``install_skill`` — whether :func:`spawn_drive_manager` installs the fleet
+      skill (U25, decision #18: a ``drive-loop`` variant teaching subagent
+      orchestration / short spoken replies / gate-by-status) under
+      ``repo/.claude/skills/`` before spawn. Defaults to ``True``.
     """
 
     name: str
@@ -102,6 +107,7 @@ class DriveLoopSpec:
     plan_content: Optional[str] = None
     plan_path: str | Path = "plan.md"
     vision_command: Optional[str] = None
+    install_skill: bool = True
 
     def __post_init__(self) -> None:
         """Validate the spec (non-empty name/repo/command, sane max_iterations)."""
@@ -196,6 +202,16 @@ apply. Update it (or the state file it points at) as you make progress, the
 same way you already commit STATE/JOURNAL updates each iteration.
 """
 
+    skill_clause = ""
+    if spec.install_skill:
+        skill_clause = f"""
+You have a FLEET SKILL installed at .claude/skills/{FLEET_SKILL_NAME}/SKILL.md
+(already materialized for you) — read it: it covers orchestrating via
+subagents/Workflows, keeping spoken status summaries short, and escalating a
+HUMAN_GATE through the status file (never invent a separate escalation
+channel). Teach it to any subagent you spawn.
+"""
+
     vision_clause = ""
     if spec.vision_command is not None:
         vision_clause = f"""
@@ -216,7 +232,7 @@ You are a fleet MANAGER running an autonomous ralph/drive loop on a target repo.
 Target repo (your working directory): {spec.repo}
 Drive command to run each iteration: {spec.command}
 {iteration_clause}
-{plan_clause}{vision_clause}
+{plan_clause}{skill_clause}{vision_clause}
 
 How a drive loop works: each iteration is ONE fresh-context unit of work driven
 by `{spec.command}`. The loop's durable state lives in the repo's committed git
@@ -275,6 +291,8 @@ def spawn_drive_manager(
     :class:`FleetManager`.
     """
     write_plan_file(spec)
+    if spec.install_skill:
+        write_fleet_skill_file(spec)
     task = build_drive_task(spec)
     return session_manager.spawn(
         task,
