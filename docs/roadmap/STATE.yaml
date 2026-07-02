@@ -16,10 +16,31 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 4
-  next_unit: U20
-  in_progress: U20   # U17 stays gated via pending_gate (deferred by human 2026-07-02)
+  next_unit: U21
+  in_progress: null   # U17 stays gated via pending_gate (deferred by human 2026-07-02)
   failure_count: 0
-  units_done: 18
+  units_done: 19
+  deferred_gates:
+    # Robot-verification steps recorded but NOT blocking the loop (human choice
+    # 2026-07-02: keep making software progress without the robot). Resolve each
+    # when the robot is next available; do not mark them resolved without a real
+    # human report.
+    - unit: U20
+      title: Vision worker tool — robot-camera path
+      note: >
+        Software slice DONE + tested (screen capture -> claude -p assessment ->
+        fleet look CLI + drive-prompt vision clause). The camera source is
+        implemented behind an injectable frame_provider and raises
+        RobotCameraUnavailable until the live app wires the Reachy Mini camera;
+        that wiring + a perceptual check need the robot.
+      steps: |
+        1. Power the Reachy Mini Lite via the REAR USB-C port; start the app
+           (cd reachy_fleet_supervisor; ./run.ps1).
+        2. Wire/verify a camera frame_provider (see .phase0/vision_ref/main.py
+           for the camera plumbing) and run:
+             uv run fleet look "describe what is on the desk in front of you" --source camera --keep
+        3. LOOK: the kept JPEG is a real camera frame (not black/garbage) and
+           the printed assessment plausibly describes the actual scene.
   units_total: 26
   pending_gate:
     unit: U17
@@ -224,6 +245,23 @@ status:
   # acceptance's "no Ollama -> HUMAN_GATE to set it up" branch didn't apply;
   # a LIVE spawn-through-Ollama smoke test was judged out of scope for this
   # unit (acceptance = "config + tests") and left as a natural follow-up.
+  #
+  # U20 (Phase 4) DONE (software; camera check deferred, see deferred_gates) —
+  # vision worker tool (decision #9). fleet/vision.py: capture_screen
+  # (PIL.ImageGrab all-monitors, downscaled JPEG; injectable grabber) +
+  # capture_robot_camera (injectable frame_provider seam; WITHOUT the robot it
+  # raises RobotCameraUnavailable — never fakes a perceptual check) +
+  # build_assessment_prompt/assess_image (one-shot `claude -p <prompt>
+  # --allowedTools Read`, Max plan, no API key — the .phase0/vision_ref CLI
+  # pattern) + look() (capture -> assess -> LookResult; temp captures cleaned
+  # up) + look_command() (uv run --project ... fleet look argv prefix so a
+  # worker in ANY repo reaches the supervisor venv). Worker wiring: new
+  # `fleet look <question> [--source screen|camera --image --out --keep
+  # --timeout --json]` CLI command (camera w/o robot = exit 2), and
+  # DriveLoopSpec.vision_command — when set, build_drive_task advertises the
+  # tool in the manager's prompt so assessments feed back into its loop.
+  # 27 new tests incl. a real-desktop screen-grab smoke test (auto-skips
+  # headless); fleet+tools suites 437 green; 0 stray bg agents.
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
   - id: U1
@@ -368,7 +406,8 @@ units:
     phase: 4
     title: Vision — worker-callable tool  # decision #9
     gate: hardware
-    status: pending
+    status: done
+    notes: "Software slice done 2026-07-02 (screen-capture path + gated camera seam); robot-camera verification recorded in status.deferred_gates (non-blocking, human choice 2026-07-02)."
     deps: [U13]
     acceptance: "A worker tool 'look at what I built': screen capture (digital) or robot camera (physical) → assessment back into the loop. Screen-capture path software-testable; robot-camera path = HUMAN_GATE. Reuse .phase0/vision_ref."
   - id: U21

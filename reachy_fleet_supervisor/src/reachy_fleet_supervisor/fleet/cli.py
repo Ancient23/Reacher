@@ -20,6 +20,7 @@ Commands::
     fleet send <key> <msg>   # steer: message / approve a gate / reassign (U12)
     fleet pause <key>        # pause a manager (claude stop; conversation kept)
     fleet resume <key>       # resume a paused/exited manager (claude respawn)
+    fleet look <question>    # worker vision tool: capture -> assessment (U20)
 
 ``key`` is a manager's short id or its voice name. ``--json`` makes any read
 command emit machine-readable output (what tests assert against). The read
@@ -39,6 +40,14 @@ from .control import ControlResult, FleetController
 from .drive import DEFAULT_DRIVE_COMMAND, DEFAULT_SENTINEL_PREFIX, DriveLoopSpec, spawn_drive_manager
 from .manager import DEFAULT_RUN_MODE, DEFAULT_PERMISSION_MODE, FleetManagerError
 from .session_manager import SessionManager
+from .vision import (
+    DEFAULT_ASSESS_TIMEOUT,
+    SOURCE_SCREEN,
+    VALID_SOURCES,
+    RobotCameraUnavailable,
+    VisionError,
+    look,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +356,37 @@ def cmd_resume(args: argparse.Namespace, out: IO[str], err: IO[str]) -> int:
     return _emit_control_result(result, out, err, as_json=args.as_json)
 
 
+def cmd_look(args: argparse.Namespace, out: IO[str], err: IO[str]) -> int:
+    """Worker-callable vision tool (U20): capture -> Claude assessment -> stdout.
+
+    A bg manager runs ``fleet look "<question>"`` via Bash to visually verify
+    what it built; the printed assessment flows back into its loop. The robot
+    ``camera`` source is hardware-gated (exit 2 without the physical robot).
+    """
+    try:
+        result = look(
+            args.question,
+            source=args.source,
+            image_path=args.image,
+            out_path=args.out,
+            keep_image=args.keep,
+            claude_bin=args.claude_bin,
+            timeout=args.timeout,
+        )
+    except RobotCameraUnavailable as exc:
+        print(f"fleet: {exc}", file=err)
+        return 2
+    except VisionError as exc:
+        print(f"fleet: {exc}", file=err)
+        return 1
+    if args.as_json:
+        json.dump(result.to_dict(), out, indent=2)
+        out.write("\n")
+    else:
+        print(result.assessment, file=out)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -482,6 +522,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_resume = sub.add_parser("resume", parents=[parent], help="Resume a paused/exited manager (claude respawn).")
     p_resume.add_argument("key", help="Manager id or name.")
     p_resume.set_defaults(func=cmd_resume)
+
+    p_look = sub.add_parser(
+        "look",
+        parents=[parent],
+        help="Look at what was built: capture (screen|camera) -> Claude assessment (U20).",
+    )
+    p_look.add_argument("question", help="What to assess in the capture.")
+    p_look.add_argument(
+        "--source",
+        choices=list(VALID_SOURCES),
+        default=SOURCE_SCREEN,
+        help=f"Capture source (default: {SOURCE_SCREEN}); 'camera' needs the physical robot.",
+    )
+    p_look.add_argument("--image", default=None, help="Assess an EXISTING image instead of capturing.")
+    p_look.add_argument("--out", default=None, help="Save the capture at this path (kept after assessment).")
+    p_look.add_argument("--keep", action="store_true", help="Keep the temp capture file after assessment.")
+    p_look.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_ASSESS_TIMEOUT,
+        help=f"Assessment subprocess timeout in seconds (default: {DEFAULT_ASSESS_TIMEOUT:g}).",
+    )
+    p_look.set_defaults(func=cmd_look)
 
     return parser
 

@@ -193,6 +193,20 @@ from .voice_contract import (
     sounds_like_confirmation,
     summarize_spawn_confirmation,
 )
+from .vision import (
+    SOURCE_SCREEN,
+    SOURCE_CAMERA,
+    VALID_SOURCES,
+    VisionError,
+    RobotCameraUnavailable,
+    LookResult,
+    capture_screen,
+    capture_robot_camera,
+    build_assessment_prompt,
+    assess_image,
+    look,
+    look_command,
+)
 
 
 __all__ = [
@@ -344,4 +358,17 @@ __all__ = [
     "wants_immediate_kickoff",
     "sounds_like_confirmation",
     "summarize_spawn_confirmation",
+    # vision worker tool (U20)
+    "SOURCE_SCREEN",
+    "SOURCE_CAMERA",
+    "VALID_SOURCES",
+    "VisionError",
+    "RobotCameraUnavailable",
+    "LookResult",
+    "capture_screen",
+    "capture_robot_camera",
+    "build_assessment_prompt",
+    "assess_image",
+    "look",
+    "look_command",
 ]

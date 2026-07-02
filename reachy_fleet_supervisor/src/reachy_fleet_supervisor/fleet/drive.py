@@ -84,6 +84,12 @@ class DriveLoopSpec:
       follows whatever ``command`` + the target repo's own files already say.
     - ``plan_path`` — where the plan file lives, relative to ``repo`` unless
       given as an absolute path. Defaults to ``"plan.md"``.
+    - ``vision_command`` — optional shell command PREFIX for the worker-callable
+      vision tool (U20, decision #9), e.g. built from
+      :func:`~reachy_fleet_supervisor.fleet.vision.look_command`. When set, the
+      task prompt advertises it so the manager can run
+      ``<vision_command> "<question>"`` via Bash to LOOK at what it built and get
+      an assessment back into its loop. ``None`` (default) = no vision clause.
     """
 
     name: str
@@ -95,6 +101,7 @@ class DriveLoopSpec:
     extra_instructions: Optional[str] = None
     plan_content: Optional[str] = None
     plan_path: str | Path = "plan.md"
+    vision_command: Optional[str] = None
 
     def __post_init__(self) -> None:
         """Validate the spec (non-empty name/repo/command, sane max_iterations)."""
@@ -112,6 +119,8 @@ class DriveLoopSpec:
             )
         if not str(self.plan_path).strip():
             raise FleetManagerError("DriveLoopSpec.plan_path must not be empty")
+        if self.vision_command is not None and not str(self.vision_command).strip():
+            raise FleetManagerError("DriveLoopSpec.vision_command must not be blank (use None)")
 
     def status_path(self) -> Path:
         """Absolute path of the ``status.json`` the manager must write."""
@@ -187,13 +196,27 @@ apply. Update it (or the state file it points at) as you make progress, the
 same way you already commit STATE/JOURNAL updates each iteration.
 """
 
+    vision_clause = ""
+    if spec.vision_command is not None:
+        vision_clause = f"""
+You have a VISION TOOL — "look at what I built" (screen capture -> Claude
+assessment). When you need to visually VERIFY digital work (a UI, a chart, a
+rendered page shown on screen), run via Bash:
+
+  {spec.vision_command} "<your specific question about what should be visible>"
+
+It captures the screen, assesses it against your question, and prints the
+assessment — fold that verdict back into your loop (fix problems it reports).
+Use it for perceptual checks only; do not substitute it for tests.
+"""
+
     return f"""\
 You are a fleet MANAGER running an autonomous ralph/drive loop on a target repo.
 
 Target repo (your working directory): {spec.repo}
 Drive command to run each iteration: {spec.command}
 {iteration_clause}
-{plan_clause}
+{plan_clause}{vision_clause}
 
 How a drive loop works: each iteration is ONE fresh-context unit of work driven
 by `{spec.command}`. The loop's durable state lives in the repo's committed git
