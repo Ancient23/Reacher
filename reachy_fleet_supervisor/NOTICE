@@ -1,0 +1,16 @@
+Reachy Fleet Supervisor
+Copyright 2026 the Reachy Fleet Supervisor contributors.
+
+This product is forked from Pollen Robotics' Reachy Mini "conversation" app
+template (Copyright Pollen Robotics, https://www.pollen-robotics.com/),
+licensed under the Apache License, Version 2.0. The original template's
+OpenAI Realtime voice brain (src/reachy_fleet_supervisor/openai_realtime.py)
+is kept unmodified per project convention.
+
+Additions on top of the Pollen base (the fleet supervisor: src/reachy_fleet_supervisor/fleet/,
+the ask_claude_code tool, the Reachy persona, and related tooling/tests) are
+likewise licensed under the Apache License, Version 2.0 — see LICENSE.
+
+This app also depends on the `reachy-mini` package (Pollen Robotics,
+Apache-2.0) and other third-party packages listed in pyproject.toml, each
+under their own licenses.

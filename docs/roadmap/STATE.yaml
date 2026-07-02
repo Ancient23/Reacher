@@ -17,9 +17,73 @@ meta:
 status:
   current_phase: 5
   next_unit: U26
-  in_progress: null   # U17 stays gated via pending_gate (deferred by human 2026-07-02)
+  in_progress: U26   # APPROVAL gate below (pending_approval_gate); U17 pending_gate UNTOUCHED (deferred)
   failure_count: 0
   units_done: 23
+  pending_approval_gate:
+    unit: U26
+    title: Package + publish as a Reachy Mini app on Hugging Face
+    what_was_built: >
+      Packaging + licensing + secrets handling implemented up to (NOT including) the
+      publish step. reachy_fleet_supervisor/pyproject.toml: added `license = { text =
+      "Apache-2.0" }` + keywords + a real description (was blank); the existing
+      `[project.entry-points.reachy_mini_apps]` entry point + HF-Spaces-style
+      README.md frontmatter (title/emoji/colors/sdk/tags) were already in place from
+      the original fork and are unchanged in shape. Added
+      reachy_fleet_supervisor/NOTICE crediting Pollen Robotics' Apache-2.0 "conversation"
+      app template as the base and stating the fleet-supervisor additions (fleet/,
+      ask_claude_code tool, persona, tests) are likewise Apache-2.0 — matching the
+      already-committed reachy_fleet_supervisor/LICENSE (Apache-2.0 full text) and
+      the confirmed license of the `reachy-mini` PyPI package itself (Apache-2.0), so
+      there is no license conflict between the Pollen base and our additions.
+      README.md gained a `license: apache-2.0` frontmatter field and a short
+      "Secrets" section telling a deployer to set OPENAI_API_KEY (Realtime voice) and
+      HF_TOKEN (only if pulling gated models) as HF Space secrets, never commit them
+      — coding itself needs no Anthropic API key (Claude Max plan via the local CLI).
+      Verified secrets hygiene: reachy_fleet_supervisor/.env.example has all real
+      secret fields blank; .env is gitignored at both repo root and app level; no
+      .env file exists in the working tree; no hardcoded keys found via search.
+      New reachy_fleet_supervisor/tests/test_packaging.py (7 tests, all software/
+      static, no network/HF calls): pyproject declares Apache-2.0 + keeps the
+      reachy_mini_apps entry point, LICENSE is real Apache-2.0 text, NOTICE
+      attributes Pollen, README frontmatter has the HF Spaces fields incl. license,
+      .env.example keeps OPENAI_API_KEY/HF_TOKEN blank, .gitignore excludes .env.
+      Full suite green: 551 passed, 2 failed = the same known pre-existing
+      profile-loading failures (test_config_name_collisions / test_external_loading,
+      documented since U1, unrelated); tests/vision torch-less collection error also
+      pre-existing/unrelated, both excluded per standing guidance. `claude agents
+      --json` before/after: only the 2 interactive human sessions, 0 stray bg agents
+      (this unit's tests are fully static/offline, no bg spawns).
+      NOT done (deliberately, per the hard "never publish autonomously" rule): no HF
+      Space was created, no `git remote` was added, nothing was pushed, no
+      `huggingface-cli`/`hf` command was executed.
+    steps: |
+      These are the exact commands to run yourself when you're ready to make the app
+      public. Nothing has been pushed or made public yet.
+      1. Log in to Hugging Face (once, if not already): from anywhere,
+             hf auth login
+         (or the older `huggingface-cli login`) and paste a token with `write` scope
+         from https://huggingface.co/settings/tokens.
+      2. Create the Space (pick your own <your-hf-username>/<space-name>, e.g.
+         reachy-fleet-supervisor):
+             hf repo create <your-hf-username>/<space-name> --type space --space_sdk static
+      3. From the repo root, push this app's subfolder as that Space's content
+         (a plain git push works because HF Spaces are git repos):
+             cd reachy_fleet_supervisor
+             git init -b main .hf-space-push          # only if you want a clean throwaway remote checkout;
+                                                        # simplest is instead, from reachy_fleet_supervisor/:
+             git remote add hf https://huggingface.co/spaces/<your-hf-username>/<space-name>
+             git push hf HEAD:main
+         (If reachy_fleet_supervisor/ isn't its own git repo, use
+          `git subtree push --prefix reachy_fleet_supervisor hf main`, run from the
+          monorepo root, instead of steps above.)
+      4. In the Space's Settings -> "Variables and secrets", add OPENAI_API_KEY (and
+         HF_TOKEN only if you need gated model/dataset access) as SECRETS, not
+         variables. Do not commit a .env file.
+      5. Confirm the Space builds and the README/index.html landing page renders as
+         expected; report PASS/PROBLEM back to the loop. A PASS marks U26 done; a
+         PROBLEM (e.g. missing dependency, bad entry point) should describe exactly
+         what broke so the next worker can fix it in place (U26 stays in_progress).
   deferred_gates:
     # Robot-verification steps recorded but NOT blocking the loop (human choice
     # 2026-07-02: keep making software progress without the robot). Resolve each
@@ -410,6 +474,11 @@ status:
   # `claude agents --json` after the run shows only the 2 interactive human
   # sessions — 0 stray bg agents. units_done 22->23; next_unit U26 (package
   # + publish — an APPROVAL gate; deps U24+U25 now both done).
+  #
+  # U26 (Phase 5) IN PROGRESS, APPROVAL-gated — packaging/licensing/secrets done
+  # 2026-07-02; publish step deliberately NOT taken. See status.pending_approval_gate
+  # for the full detail + exact copy-pasteable publish commands. units_done stays 23
+  # (not done until the human confirms the publish).
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
   - id: U1
@@ -602,6 +671,7 @@ units:
     phase: 5
     title: Package + publish as a Reachy Mini app on Hugging Face
     gate: approval
-    status: pending
+    status: in_progress
+    notes: "Packaging/licensing/secrets done 2026-07-02 (pyproject license+keywords, NOTICE, README license frontmatter + secrets section, test_packaging.py); publish step requires explicit human go-ahead, see status.pending_approval_gate."
     deps: [U24, U25]
     acceptance: "Package the app; sort licensing (Pollen base + additions) + secrets handling. Implement up to the publish step, then HUMAN_GATE for explicit go-ahead. NEVER publish autonomously."
