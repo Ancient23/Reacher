@@ -168,6 +168,20 @@ def run(
         except Exception:  # noqa: BLE001
             logger.exception("Failed to attach the fleet voice renderer")
 
+        # Proactive supervisor observer (U21, decision #9): Reachy glances at a
+        # manager's work (screen capture -> claude -p assessment) the moment it
+        # completes, and comments on it aloud — the complement of U20's
+        # worker-callable "look at what I built" tool. Best-effort, same as the
+        # voice renderer: a vision hiccup must never break the fleet or the app.
+        try:
+            from reachy_fleet_supervisor.fleet.observer import FleetObserver
+
+            observer = FleetObserver(speak=handler.speak_threadsafe)
+            observer.attach(fleet_runtime.state)
+            logger.info("Fleet observer attached (glances + comments on completion)")
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to attach the fleet observer")
+
     stream_manager: gr.Blocks | LocalStream | None = None
 
     if args.gradio:

@@ -16,10 +16,10 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 4
-  next_unit: U21
+  next_unit: U23
   in_progress: null   # U17 stays gated via pending_gate (deferred by human 2026-07-02)
   failure_count: 0
-  units_done: 19
+  units_done: 20
   deferred_gates:
     # Robot-verification steps recorded but NOT blocking the loop (human choice
     # 2026-07-02: keep making software progress without the robot). Resolve each
@@ -41,6 +41,28 @@ status:
              uv run fleet look "describe what is on the desk in front of you" --source camera --keep
         3. LOOK: the kept JPEG is a real camera frame (not black/garbage) and
            the printed assessment plausibly describes the actual scene.
+    - unit: U21
+      title: Vision supervisor observer — robot glance + spoken comment
+      note: >
+        Software slice DONE + tested (fleet/observer.py FleetObserver — an
+        edge-triggered FleetState subscriber that, when a manager COMPLETES,
+        calls vision.look (screen source by default) and speaks a one-line
+        comment via the Realtime speak seam; wired best-effort in main.py
+        alongside the voice renderer). What needs the robot: hearing Reachy
+        actually comment aloud after a manager finishes, and (optionally) the
+        camera-source glance once U20's frame_provider is wired.
+      steps: |
+        1. Power the Reachy Mini Lite via the REAR USB-C port; start the app
+           (cd reachy_fleet_supervisor; ./run.ps1).
+        2. Spawn a trivial manager by voice (or `uv run fleet spawn ...`) with
+           a quick task and let it finish.
+        3. LISTEN: shortly after the manager completes, Reachy should say the
+           usual "<name> finished its task" AND a follow-up glance comment
+           starting "I took a look at <name>'s work — ..." that plausibly
+           matches what is on screen.
+        4. (Optional, after U20's camera frame_provider is wired) construct a
+           FleetObserver with source="camera" and confirm the comment matches
+           the physical scene.
   units_total: 26
   pending_gate:
     unit: U17
@@ -414,7 +436,8 @@ units:
     phase: 4
     title: Vision — supervisor observer
     gate: hardware
-    status: pending
+    status: done
+    notes: "Software slice done 2026-07-02 (FleetObserver: edge-triggered glance-on-completion -> vision.look -> spoken comment; wired in main.py); robot verification recorded in status.deferred_gates (non-blocking, human choice 2026-07-02)."
     deps: [U20]
     acceptance: "Reachy proactively glances + comments on fleet work. HUMAN_GATE: confirm on the robot."
   - id: U22

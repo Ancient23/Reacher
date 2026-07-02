@@ -207,6 +207,14 @@ from .vision import (
     look,
     look_command,
 )
+from .observer import (
+    DEFAULT_GLANCE_KINDS,
+    GlanceReport,
+    FleetObserver,
+    should_glance,
+    build_glance_question,
+    build_glance_comment,
+)
 
 
 __all__ = [
@@ -371,4 +379,11 @@ __all__ = [
     "assess_image",
     "look",
     "look_command",
+    # observer (U21)
+    "DEFAULT_GLANCE_KINDS",
+    "GlanceReport",
+    "FleetObserver",
+    "should_glance",
+    "build_glance_question",
+    "build_glance_comment",
 ]
