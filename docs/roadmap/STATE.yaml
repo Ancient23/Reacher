@@ -16,10 +16,10 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 3
-  next_unit: U16
-  in_progress: "U16"
+  next_unit: U17
+  in_progress: null
   failure_count: 0
-  units_done: 15
+  units_done: 16
   units_total: 26
   # Phase 2 COMPLETE (U1-U10). U11 (Phase 3 run_mode knob) DONE — software complete +
   # green; the optional RC LIVE-CONNECT check (claude.ai-OAuth steering) was SKIPPED by
@@ -122,6 +122,22 @@ status:
   # question/answer phrasing + voice-resume worked; idle motion small/calm +
   # gestures subtle + dashboard cards wide/expandable; Reachy waited for a
   # mid-sentence pause before responding). Gate closed; no further rework needed.
+  #
+  # U16 (Phase 3) DONE — written plan file per manager (decision #11). fleet/drive.py:
+  # DriveLoopSpec gains plan_content (plan.md-style task+gates text) + plan_path
+  # (default "plan.md", relative to repo unless absolute; resolved_plan_path()).
+  # write_plan_file(spec, overwrite=False) materializes it BEFORE spawn but NEVER
+  # clobbers an existing file (a manager's own committed plan edits survive a
+  # respawn/reconnect with the same spec; overwrite=True is the escape hatch).
+  # build_drive_task adds a plan clause pointing the manager at the exact plan
+  # path as the authoritative committed state for its task+gates; omitted when
+  # plan_content is None (fully backward compatible — all prior prompts
+  # unchanged). spawn_drive_manager calls write_plan_file first so the file
+  # exists on the manager's first read. Exported via fleet/__init__. 9 new tests
+  # (defaults, path resolution rel/abs, validation, no-clobber + overwrite,
+  # prompt clause presence/absence, spawn materialization). Fleet suite 337
+  # green; 0 stray bg agents (one stray u12-steer agent from a timeout-killed
+  # partial pytest run was found and stopped/removed during this iteration).
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
   - id: U1
@@ -236,7 +252,7 @@ units:
     phase: 3
     title: Written plan file per manager
     gate: software
-    status: in_progress
+    status: done
     deps: [U13]
     acceptance: "A manager can be handed a plan.md-style file (task + gates = the drive contract's committed state). Tested."
   - id: U17

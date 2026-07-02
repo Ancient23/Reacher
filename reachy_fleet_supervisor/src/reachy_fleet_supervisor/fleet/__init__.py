@@ -112,6 +112,7 @@ from .drive import (
     DriveLoopSpec,
     build_drive_task,
     spawn_drive_manager,
+    write_plan_file,
 )
 from .manager import (
     RUN_MODE_ENV,
@@ -260,6 +261,7 @@ __all__ = [
     "DriveLoopSpec",
     "build_drive_task",
     "spawn_drive_manager",
+    "write_plan_file",
     "DEFAULT_DRIVE_COMMAND",
     "DEFAULT_SENTINEL_PREFIX",
     "STATUS_FILENAME",

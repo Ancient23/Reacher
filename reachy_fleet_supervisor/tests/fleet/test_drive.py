@@ -29,6 +29,7 @@ from reachy_fleet_supervisor.fleet import (
     build_drive_task,
     spawn_drive_manager,
     status_path_for,
+    write_plan_file,
 )
 from reachy_fleet_supervisor.fleet import state as state_mod
 from reachy_fleet_supervisor.fleet.manager import FleetManagerError
@@ -99,6 +100,100 @@ def test_build_drive_task_bounded_and_extra(tmp_path) -> None:
     assert "at most 1 iteration" in task
     assert "LOOP_STATE: <STATE>" in task
     assert "Be terse." in task
+
+
+# ---------------------------------------------------------------------------
+# written plan file per manager (U16, decision #11)
+# ---------------------------------------------------------------------------
+
+
+def test_spec_plan_defaults_to_none(tmp_path) -> None:
+    spec = DriveLoopSpec(name="x", repo=tmp_path)
+    assert spec.plan_content is None
+    assert spec.resolved_plan_path() == tmp_path / "plan.md"
+
+
+def test_spec_plan_path_validation(tmp_path) -> None:
+    with pytest.raises(FleetManagerError):
+        DriveLoopSpec(name="x", repo=tmp_path, plan_path="  ")
+
+
+def test_resolved_plan_path_relative_and_absolute(tmp_path) -> None:
+    rel = DriveLoopSpec(name="x", repo=tmp_path / "repo", plan_path="docs/PLAN.md")
+    assert rel.resolved_plan_path() == tmp_path / "repo" / "docs" / "PLAN.md"
+
+    abs_path = tmp_path / "elsewhere" / "PLAN.md"
+    absolute = DriveLoopSpec(name="x", repo=tmp_path / "repo", plan_path=abs_path)
+    assert absolute.resolved_plan_path() == abs_path
+
+
+def test_write_plan_file_noop_without_content(tmp_path) -> None:
+    spec = DriveLoopSpec(name="x", repo=tmp_path / "repo")
+    assert write_plan_file(spec) is None
+    assert not (tmp_path / "repo" / "plan.md").exists()
+
+
+def test_write_plan_file_writes_content(tmp_path) -> None:
+    spec = DriveLoopSpec(
+        name="x", repo=tmp_path / "repo", plan_content="# Task\nDo the thing.\n"
+    )
+    written = write_plan_file(spec)
+    assert written == tmp_path / "repo" / "plan.md"
+    assert written.read_text(encoding="utf-8") == "# Task\nDo the thing.\n"
+
+
+def test_write_plan_file_does_not_clobber_existing(tmp_path) -> None:
+    """A manager's own prior edits (committed state) survive a respawn."""
+    spec = DriveLoopSpec(
+        name="x", repo=tmp_path / "repo", plan_content="original\n"
+    )
+    write_plan_file(spec)
+    path = spec.resolved_plan_path()
+    path.write_text("manager's own edited progress\n", encoding="utf-8")
+
+    # Respawning with the SAME spec (same plan_content) must not overwrite it.
+    result = write_plan_file(spec)
+    assert result == path
+    assert path.read_text(encoding="utf-8") == "manager's own edited progress\n"
+
+    # Explicit overwrite=True is the escape hatch.
+    write_plan_file(spec, overwrite=True)
+    assert path.read_text(encoding="utf-8") == "original\n"
+
+
+def test_build_drive_task_includes_plan_clause_when_set(tmp_path) -> None:
+    spec = DriveLoopSpec(
+        name="planner",
+        repo=tmp_path / "repo",
+        plan_content="# Plan\ntask + gates\n",
+        plan_path="PLAN.md",
+    )
+    task = build_drive_task(spec)
+    assert str(spec.resolved_plan_path()) in task
+    assert "WRITTEN PLAN FILE" in task
+    assert "authoritative" in task
+
+
+def test_build_drive_task_omits_plan_clause_by_default(tmp_path) -> None:
+    spec = DriveLoopSpec(name="noplanner", repo=tmp_path / "repo")
+    task = build_drive_task(spec)
+    assert "WRITTEN PLAN FILE" not in task
+
+
+def test_spawn_drive_manager_materializes_plan_file(tmp_path) -> None:
+    spec = DriveLoopSpec(
+        name="driver2",
+        repo=tmp_path / "repo",
+        status_dir=tmp_path / "s",
+        plan_content="# Plan\ndo it\n",
+    )
+    fake = _FakeSession()
+    spawn_drive_manager(fake, spec)
+    plan_path = spec.resolved_plan_path()
+    assert plan_path.is_file()
+    assert plan_path.read_text(encoding="utf-8") == "# Plan\ndo it\n"
+    # The spawned task references the (now-existing) plan path.
+    assert str(plan_path) in fake.calls[0]["task"]
 
 
 # ---------------------------------------------------------------------------

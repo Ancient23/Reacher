@@ -1,4 +1,6 @@
-"""Managers run ralph/drive loops (U13, decision #15).
+"""Managers run ralph/drive loops (U13, decision #15) with an optional written
+plan file per manager (U16, decision #11 "optional written plan file per
+worker for plan-gated autonomy").
 
 A fleet *manager* is a full orchestrator: rather than a single goal it runs a
 **ralph/drive loop** — a fresh-context iteration of a ``/drive-*`` command on a
@@ -72,6 +74,16 @@ class DriveLoopSpec:
       fleet default status dir); the absolute per-manager path is computed from
       it and baked into the prompt.
     - ``extra_instructions`` — optional extra guidance appended to the prompt.
+    - ``plan_content`` — optional plan.md-style text (task + gates) handed to the
+      manager as ITS OWN written plan file (U16, decision #11). When set, it is
+      written to ``plan_path`` (relative to ``repo`` unless absolute) before spawn
+      — unless the file already exists, in which case the existing committed
+      version wins (so a resumed manager keeps following its own prior edits,
+      matching the drive contract's "durable committed state" pattern). ``None``
+      (the default) means: no plan file is managed by this spec — the manager
+      follows whatever ``command`` + the target repo's own files already say.
+    - ``plan_path`` — where the plan file lives, relative to ``repo`` unless
+      given as an absolute path. Defaults to ``"plan.md"``.
     """
 
     name: str
@@ -81,6 +93,8 @@ class DriveLoopSpec:
     max_iterations: Optional[int] = None
     status_dir: Optional[str | Path] = None
     extra_instructions: Optional[str] = None
+    plan_content: Optional[str] = None
+    plan_path: str | Path = "plan.md"
 
     def __post_init__(self) -> None:
         """Validate the spec (non-empty name/repo/command, sane max_iterations)."""
@@ -96,10 +110,37 @@ class DriveLoopSpec:
             raise FleetManagerError(
                 f"DriveLoopSpec.max_iterations must be >= 1, got {self.max_iterations!r}"
             )
+        if not str(self.plan_path).strip():
+            raise FleetManagerError("DriveLoopSpec.plan_path must not be empty")
 
     def status_path(self) -> Path:
         """Absolute path of the ``status.json`` the manager must write."""
         return status_path_for(self.name, self.status_dir)
+
+    def resolved_plan_path(self) -> Path:
+        """Absolute path of the plan file (``plan_path`` resolved against ``repo``)."""
+        p = Path(self.plan_path)
+        return p if p.is_absolute() else Path(self.repo) / p
+
+
+def write_plan_file(spec: DriveLoopSpec, *, overwrite: bool = False) -> Optional[Path]:
+    """Materialize ``spec.plan_content`` at ``spec.resolved_plan_path()``, if any.
+
+    No-op (returns ``None``) when ``spec.plan_content`` is ``None``. Otherwise
+    creates parent directories as needed and writes the file, UNLESS it already
+    exists and ``overwrite`` is ``False`` (default) — a manager's own prior edits
+    to its plan file are the drive contract's committed state and must not be
+    clobbered by a respawn/reconnect using the same spec. Returns the path
+    written (or the pre-existing path left untouched).
+    """
+    if spec.plan_content is None:
+        return None
+    path = spec.resolved_plan_path()
+    if path.exists() and not overwrite:
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(spec.plan_content, encoding="utf-8")
+    return path
 
 
 def build_drive_task(spec: DriveLoopSpec) -> str:
@@ -131,12 +172,28 @@ def build_drive_task(spec: DriveLoopSpec) -> str:
     if spec.extra_instructions and spec.extra_instructions.strip():
         extra_clause = f"\nAdditional instructions:\n{spec.extra_instructions.strip()}\n"
 
+    plan_clause = ""
+    if spec.plan_content is not None:
+        plan_clause = f"""
+You have a WRITTEN PLAN FILE at exactly this path (it has already been created
+for you if it did not exist):
+
+  {spec.resolved_plan_path()}
+
+This plan file IS the drive contract's committed state for YOUR task (task +
+gates), same role as this repo's own roadmap/plan docs — read it before your
+first iteration and treat it as authoritative for what to do and which gates
+apply. Update it (or the state file it points at) as you make progress, the
+same way you already commit STATE/JOURNAL updates each iteration.
+"""
+
     return f"""\
 You are a fleet MANAGER running an autonomous ralph/drive loop on a target repo.
 
 Target repo (your working directory): {spec.repo}
 Drive command to run each iteration: {spec.command}
 {iteration_clause}
+{plan_clause}
 
 How a drive loop works: each iteration is ONE fresh-context unit of work driven
 by `{spec.command}`. The loop's durable state lives in the repo's committed git
@@ -189,8 +246,12 @@ def spawn_drive_manager(
     ``cwd`` = ``spec.repo``. All hosting knobs (``run_mode`` / ``permission_mode``
     / ``model`` / ``mcp_configs`` / ``worktree``) pass straight through, so a
     drive-loop manager is observed and controlled exactly like any other fleet
-    manager. Returns the tracked :class:`FleetManager`.
+    manager. If ``spec.plan_content`` is set, the plan file is materialized (via
+    :func:`write_plan_file`, non-destructive of any pre-existing file) BEFORE
+    spawn, so the manager finds it on its first read. Returns the tracked
+    :class:`FleetManager`.
     """
+    write_plan_file(spec)
     task = build_drive_task(spec)
     return session_manager.spawn(
         task,
