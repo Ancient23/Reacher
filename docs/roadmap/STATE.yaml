@@ -16,10 +16,10 @@ meta:
 #   approval  — outward-facing / irreversible (publish); implement up to the action then HUMAN_GATE.
 status:
   current_phase: 3
-  next_unit: U15
-  in_progress: "U15"
+  next_unit: U16
+  in_progress: "U16"
   failure_count: 0
-  units_done: 14
+  units_done: 15
   units_total: 26
   # Phase 2 COMPLETE (U1-U10). U11 (Phase 3 run_mode knob) DONE — software complete +
   # green; the optional RC LIVE-CONNECT check (claude.ai-OAuth steering) was SKIPPED by
@@ -117,71 +117,11 @@ status:
   # new answer_gate voice tool (profile) -> FleetController.send (claude --resume
   # -p, U12/decision #16) + persona instructions. HARDWARE gate: audio/voice
   # needs the physical robot, so the spoken path is human-verified (pending_gate).
-  pending_gate: |
-    U15 gate -> voice escalation (RE-RAISED after human test feedback 2026-07-01).
-    Audio/voice + robot motion cannot be self-verified; please re-test on the robot.
-
-    WHAT WAS FIXED since the last gate (all software-tested; fleet suite 328 green
-    + 2 new realtime tests):
-    - MOTION TOO BIG (esp. idle): idle breathing is now GENTLE (antenna sway 15°->4°,
-      vertical 5mm->2mm) and gestures are SUBTLE (head-yaw range ±40°->±18°, antenna
-      poses roughly halved). Amplitudes are named constants; motion stays smooth
-      (easing kept) — this cut MAGNITUDE, not smoothness.
-    - DASHBOARD CARDS NOW WIDE: a single full-width column (cards span the viewport;
-      transcript finally has room), 2 columns only on very wide (>=1400px) screens.
-      Stay-open-across-polls + card retention (poll --all) preserved.
-    - REACHY WAITS LONGER before responding: turn-detection silence threshold raised
-      ~200ms -> ~1000ms (+ more prefix padding) so it doesn't cut you off mid-sentence.
-    - GATE PHRASING: Reachy now says it needs an ANSWER for a question (vs approval /
-      neutral "needs you"), and no longer mislabels a question as "waiting on an action".
-
-    SETUP
-    1. Power the robot on the REAR USB-C port (validated-stable; front/USB-B browns out).
-    2. Launch the app + fleet (from C:/Source/reacher):
-         cd reachy_fleet_supervisor; ./run.ps1
-       Wait until voice is live (you can talk to Reachy) and http://127.0.0.1:7860/fleet loads.
-
-    TEST A — speak on COMPLETION (re-verify it still works)
-    3. By VOICE: "Spawn a manager named greeter on C:/Source/reacher that creates a file
-       hello.txt containing hi, then stop."  (Reachy calls spawn_manager; watch it on /fleet.)
-    4. LISTEN: when it finishes, Reachy SPEAKS the completion aloud (e.g. "greeter finished
-       its task"). LOOK: the greeter card stays on /fleet (does not vanish) and shows done.
-
-    TEST B — speak on a GATE ("needs you") + resume by voice  (the fixed path)
-    5. By VOICE: "Spawn a manager named builder on C:/Source/reacher that asks me a
-       clarifying question and waits for my answer."  (This parks it blocked/waitingFor —
-       the exact case that was silent before. A build that fails + reports HUMAN_GATE also works.)
-    6. LISTEN: Reachy SPEAKS the escalation aloud. Because it is a QUESTION, Reachy should
-       correctly say it needs an ANSWER to a question (e.g. "builder needs your answer:
-       <the question>") — NOT "waiting on an action". LOOK: builder card is present and
-       flagged for attention on /fleet.
-    7. ANSWER BY VOICE, e.g.: "Tell builder to use port 8080 and continue."
-       EXPECT: Reachy calls answer_gate and confirms aloud ("answered builder and resumed its
-       work"); on /fleet builder leaves the gated state and continues.
-
-    TEST C — dashboard width + motion (the re-tested asks)
-    8. Open http://127.0.0.1:7860/fleet: confirm ALL spawned managers show as cards (none
-       missing), the cards are WIDE (each spans the window width, transcript readable), and
-       the transcript details expand AND stay open across the ~2s live polls.
-    9. WATCH the robot: at IDLE the breathing should be SMALL/calm (gentle, not big sweeps),
-       and when it turns between managers / signals attention the gesture should be SUBTLE
-       and smooth (small yaw, eases in/out) — not big or abrupt.
-
-    TEST D — listens long enough (don't-cut-me-off)
-    10. Speak a SLOW sentence to Reachy with a deliberate mid-sentence pause. EXPECT: Reachy
-        WAITS for you to finish before it responds (it should not jump in during the pause).
-
-    CLEANUP
-    11. By VOICE: "Stop and remove the greeter and builder managers"  (or `claude stop <id>`
-        + `claude rm <id>` for each). Confirm `claude agents --json` shows no stray bg managers
-        (your interactive sessions + run.ps1 app may remain).
-
-    PASS if: (A) completion spoken + card stays; (B) the gate "needs you" is spoken AND, for a
-    question, phrased as needing an ANSWER (not an action), and a spoken answer resumes the
-    manager; (C) idle motion is small/calm + gestures subtle, and cards are WIDE + expandable;
-    (D) Reachy waits for you to finish before acting. Report PASS, or describe exactly what
-    was/wasn't spoken/seen/felt.
-
+  # U15 (Phase 3) DONE — human live test 2026-07-01 CONFIRMED PASS: all four tests
+  # A-D passed (completion spoken + card retained; gate spoken with correct
+  # question/answer phrasing + voice-resume worked; idle motion small/calm +
+  # gestures subtle + dashboard cards wide/expandable; Reachy waited for a
+  # mid-sentence pause before responding). Gate closed; no further rework needed.
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
   - id: U1
@@ -288,7 +228,7 @@ units:
     phase: 3
     title: Gate → voice escalation  # decision #17
     gate: hardware
-    status: pending
+    status: done
     deps: [U13, U14]
     acceptance: "HUMAN_GATE surfaces to the Realtime host and is spoken; the spoken answer resumes the loop. HUMAN_GATE: confirm by voice on the robot."
     notes: "Backlog (from U8 hardware feedback 2026-06-28): also have Reachy SPEAK the fleet status aloud (e.g. on a state change / on request — 'build failed', 'tests needs you'), not just signal it on the body. Body + voice are complementary renderers of FleetState; voice plumbing belongs here."
@@ -296,7 +236,7 @@ units:
     phase: 3
     title: Written plan file per manager
     gate: software
-    status: pending
+    status: in_progress
     deps: [U13]
     acceptance: "A manager can be handed a plan.md-style file (task + gates = the drive contract's committed state). Tested."
   - id: U17
