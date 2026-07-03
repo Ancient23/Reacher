@@ -21,6 +21,7 @@ from PIL import Image
 from reachy_fleet_supervisor.fleet import cli
 from reachy_fleet_supervisor.fleet.drive import DriveLoopSpec, build_drive_task
 from reachy_fleet_supervisor.fleet.manager import FleetManagerError
+from reachy_fleet_supervisor.fleet import vision
 from reachy_fleet_supervisor.fleet.vision import (
     DEFAULT_ASSESS_TIMEOUT,
     JPEG_QUALITY,
@@ -35,6 +36,7 @@ from reachy_fleet_supervisor.fleet.vision import (
     build_assessment_prompt,
     capture_robot_camera,
     capture_screen,
+    default_robot_frame_provider,
     look,
     look_command,
 )
@@ -127,6 +129,113 @@ class TestCaptureRobotCamera:
         path = capture_robot_camera(tmp_path / "np.jpg", frame_provider=lambda: frame)
         with Image.open(path) as img:
             assert img.size == (64, 48)
+
+
+# ---------------------------------------------------------------------------
+# default_robot_frame_provider — the real Reachy Mini camera wiring (U20
+# problem-fix 2026-07-03). Lazy-imports `reachy_mini`; every branch here is
+# exercised WITHOUT a real robot/daemon by monkeypatching that import or the
+# `ReachyMini` client, so the software suite never needs the hardware.
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultRobotFrameProvider:
+    def test_sdk_not_importable_raises_gated(self, monkeypatch):
+        """Lazy-import guard: no reachy_mini SDK -> RobotCameraUnavailable, not ImportError."""
+        real_import = __import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "reachy_mini":
+                raise ImportError("no module named reachy_mini")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", fake_import)
+        with pytest.raises(RobotCameraUnavailable, match="not importable"):
+            default_robot_frame_provider()
+
+    def test_daemon_unreachable_raises_gated(self, monkeypatch):
+        """SDK importable but the daemon connection itself fails -> gated, not a crash."""
+        import sys
+        import types
+
+        class _BoomReachyMini:
+            def __init__(self, *a, **kw):
+                raise ConnectionError("no daemon on localhost:8000")
+
+        fake_module = types.ModuleType("reachy_mini")
+        fake_module.ReachyMini = _BoomReachyMini
+        monkeypatch.setitem(sys.modules, "reachy_mini", fake_module)
+        with pytest.raises(RobotCameraUnavailable, match="could not reach"):
+            default_robot_frame_provider()
+
+    def test_no_frame_yet_raises_gated(self, monkeypatch):
+        """Daemon reachable but returns no frame -> gated, never fakes a frame."""
+        import sys
+        import types
+
+        class _EmptyFrameReachyMini:
+            def __init__(self, *a, **kw):
+                self.media = SimpleNamespace(get_frame=lambda: None)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        fake_module = types.ModuleType("reachy_mini")
+        fake_module.ReachyMini = _EmptyFrameReachyMini
+        monkeypatch.setitem(sys.modules, "reachy_mini", fake_module)
+        with pytest.raises(RobotCameraUnavailable, match="no frame yet"):
+            default_robot_frame_provider()
+
+    def test_real_frame_is_returned(self, monkeypatch):
+        """Happy path: a reachable daemon with a frame -> the raw frame is returned as-is."""
+        import sys
+        import types
+
+        sentinel_frame = object()
+
+        class _WorkingReachyMini:
+            def __init__(self, *a, **kw):
+                self.media = SimpleNamespace(get_frame=lambda: sentinel_frame)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        fake_module = types.ModuleType("reachy_mini")
+        fake_module.ReachyMini = _WorkingReachyMini
+        monkeypatch.setitem(sys.modules, "reachy_mini", fake_module)
+        assert default_robot_frame_provider() is sentinel_frame
+
+    def test_wired_end_to_end_through_capture_robot_camera(self, tmp_path, monkeypatch):
+        """The provider plugs straight into capture_robot_camera like any other."""
+        import sys
+        import types
+
+        np = pytest.importorskip("numpy")
+        frame = np.full((10, 10, 3), 200, dtype=np.uint8)
+
+        class _WorkingReachyMini:
+            def __init__(self, *a, **kw):
+                self.media = SimpleNamespace(get_frame=lambda: frame)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        fake_module = types.ModuleType("reachy_mini")
+        fake_module.ReachyMini = _WorkingReachyMini
+        monkeypatch.setitem(sys.modules, "reachy_mini", fake_module)
+        path = capture_robot_camera(
+            tmp_path / "robot.jpg", frame_provider=default_robot_frame_provider
+        )
+        assert path.is_file()
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +431,31 @@ class TestCliLook:
         assert seen["keep_image"] is True
         assert seen["timeout"] == 33.0
         assert seen["claude_bin"] == "cbin"
+
+    def test_look_camera_wires_real_frame_provider_by_default(self, monkeypatch):
+        """U20 problem-fix: --source camera must wire the real robot camera
+        provider with NO extra flags — this used to always pass frame_provider
+        unset, so camera never worked even on a live robot."""
+        seen = {}
+
+        def fake_look(question, **kw):
+            seen.update(kw)
+            return LookResult(source=SOURCE_CAMERA, image_path=None, assessment="x")
+
+        code, _, _ = self._run(["look", "q", "--source", "camera"], monkeypatch, fake_look)
+        assert code == 0
+        assert seen["frame_provider"] is vision.default_robot_frame_provider
+
+    def test_look_screen_passes_no_frame_provider(self, monkeypatch):
+        seen = {}
+
+        def fake_look(question, **kw):
+            seen.update(kw)
+            return LookResult(source=SOURCE_SCREEN, image_path=None, assessment="x")
+
+        code, _, _ = self._run(["look", "q"], monkeypatch, fake_look)
+        assert code == 0
+        assert seen["frame_provider"] is None
 
     def test_look_camera_gated_exit_2(self, monkeypatch):
         def fake_look(question, **kw):

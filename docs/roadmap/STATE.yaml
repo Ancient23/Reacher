@@ -92,39 +92,103 @@ status:
     - unit: U20
       title: Vision worker tool — robot-camera path
       note: >
-        Software slice DONE + tested (screen capture -> claude -p assessment ->
-        fleet look CLI + drive-prompt vision clause). The camera source is
-        implemented behind an injectable frame_provider and raises
-        RobotCameraUnavailable until the live app wires the Reachy Mini camera;
-        that wiring + a perceptual check need the robot.
+        PROBLEM-FIX 2026-07-03 (human live test reported "no frame provider
+        wired" — the camera seam existed but NOTHING wired the real robot
+        camera). Fixed: fleet/vision.py gained default_robot_frame_provider()
+        — connects a standalone `ReachyMini()` client (lazy `reachy_mini`
+        import; localhost auto-detect, same as the rest of the app) to the
+        ALREADY-RUNNING daemon just long enough to call
+        `reachy_mini.media.get_frame()`, then disconnects; raises
+        RobotCameraUnavailable (never fakes a frame) if the SDK isn't
+        importable, the daemon connection itself fails, or no frame is ready
+        yet. fleet/cli.py's `cmd_look` now wires this provider automatically
+        whenever `--source camera` is passed — NO extra flags needed, exactly
+        per the human ask. The generic `vision.look()`/`capture_robot_camera()`
+        API is UNCHANGED (frame_provider=None still means "not wired" for
+        direct callers/tests — the hardware-gated contract + its existing
+        tests are untouched); only the CLI's camera path now supplies the real
+        provider by default. 8 new tests (lazy-import guard via faked
+        `builtins.__import__`, daemon-unreachable / no-frame-yet / happy-path
+        via a fake `reachy_mini` module injected into sys.modules — none touch
+        real hardware, plus CLI tests asserting `--source camera` passes
+        `vision.default_robot_frame_provider` and `--source screen` doesn't).
+        Fleet+tools suite: 560 passed, only the 2 pre-existing profile-loading
+        failures remain. Still needs the robot to confirm a REAL frame comes
+        back (not black/garbage) — that perceptual check can't be
+        self-verified.
       steps: |
         1. Power the Reachy Mini Lite via the REAR USB-C port; start the app
-           (cd reachy_fleet_supervisor; ./run.ps1).
-        2. Wire/verify a camera frame_provider (see .phase0/vision_ref/main.py
-           for the camera plumbing) and run:
+           (cd reachy_fleet_supervisor; ./run.ps1) so the daemon is running.
+        2. From another shell (same machine), with NO extra flags:
              uv run fleet look "describe what is on the desk in front of you" --source camera --keep
         3. LOOK: the kept JPEG is a real camera frame (not black/garbage) and
-           the printed assessment plausibly describes the actual scene.
+           the printed assessment plausibly describes the actual scene. If it
+           instead prints "could not reach the Reachy Mini daemon / camera:
+           ...", report the exact error text — it means either the daemon
+           isn't reachable from this process or media is released elsewhere.
     - unit: U21
       title: Vision supervisor observer — robot glance + spoken comment
       note: >
-        Software slice DONE + tested (fleet/observer.py FleetObserver — an
-        edge-triggered FleetState subscriber that, when a manager COMPLETES,
-        calls vision.look (screen source by default) and speaks a one-line
-        comment via the Realtime speak seam; wired best-effort in main.py
-        alongside the voice renderer). What needs the robot: hearing Reachy
-        actually comment aloud after a manager finishes, and (optionally) the
-        camera-source glance once U20's frame_provider is wired.
+        PROBLEM-FIX 2026-07-03 (human live test reported NO spoken glance
+        comment when a manager completed). Investigated per the task's four
+        questions: (1) FleetObserver IS attached in main.py's live
+        `_mount_fleet` (reachable in both the gradio and headless startup
+        paths, right after the voice renderer, each independently
+        try/excepted so one failing doesn't block the other); (2) its
+        completion edge-trigger logic is identical in shape to
+        FleetVoiceRenderer's (which DID confirm-pass in U15's live test), and
+        primes silently on the very first snapshot by design (no retroactive
+        glance for an already-finished manager on restart) — this is the one
+        remaining plausible race if a trivial manager finishes before the
+        observer's first poll, but that would equally have suppressed the
+        voice renderer's "finished" line, which the human DID hear, so it's an
+        unlikely sole cause; (3) vision.look(source=screen) is fully
+        exception-safe (VisionError incl. RobotCameraUnavailable -> logged +
+        swallowed; broad Exception -> logged + swallowed) — NOT silent, but
+        previously only logged on FAILURE, with no log at all on a normal
+        attempt, so a live run gave no trail either way; (4) speak_threadsafe
+        IS wired (same `handler.speak_threadsafe` seam voice.py uses,
+        confirmed working in U15) but no-ops silently if there is no live
+        realtime connection/loop at the exact moment a glance fires. Root
+        cause could not be conclusively pinned without a live re-test, so the
+        concrete fix this pass is full attempt-level diagnosability:
+        fleet/observer.py now logs "glance attempted for <key> (source=...)"
+        BEFORE calling look_fn (previously only failures were logged) and
+        "speaking glance for <key>" right before the speak call (previously
+        only success, AFTER a successful speak, was logged) — so the next
+        live test's console (setup_logger defaults to INFO, so these ARE
+        visible without --debug) will show exactly how far a glance got:
+        never attempted (edge-trigger/attach problem) vs. attempted+failed
+        (vision problem, with the existing failure-reason log) vs.
+        attempted+spoken-attempted-but-not-heard (speak_threadsafe/audio
+        problem). 2 new tests assert both log lines fire on a successful
+        glance and that only the attempt (not the speak) line fires when
+        vision.look raises. Fleet+tools suite: 560 passed, only the 2
+        pre-existing profile-loading failures remain.
       steps: |
         1. Power the Reachy Mini Lite via the REAR USB-C port; start the app
-           (cd reachy_fleet_supervisor; ./run.ps1).
+           (cd reachy_fleet_supervisor; ./run.ps1) and watch its console.
         2. Spawn a trivial manager by voice (or `uv run fleet spawn ...`) with
            a quick task and let it finish.
         3. LISTEN: shortly after the manager completes, Reachy should say the
            usual "<name> finished its task" AND a follow-up glance comment
            starting "I took a look at <name>'s work — ..." that plausibly
            matches what is on screen.
-        4. (Optional, after U20's camera frame_provider is wired) construct a
+        4. If still silent, READ the console log around that time and report
+           back exactly which of these lines appear (this pins the root
+           cause precisely for the next fix pass):
+             - "fleet observer: glance attempted for ..." (if ABSENT: the
+               edge-trigger/attach path itself never fired — likely the
+               priming race in note above, or the observer failed to attach
+               at startup — check for "Failed to attach the fleet observer").
+             - "fleet observer: glance unavailable for ..." or "glance failed
+               for ..." (if PRESENT: the vision.look call itself failed —
+               report the exception text logged alongside it).
+             - "fleet observer: speaking glance for ..." (if PRESENT but no
+               speech was heard: the glance succeeded and speak_threadsafe was
+               called — the problem is downstream, in the realtime
+               connection/audio path, same seam voice.py uses).
+        5. (Optional, once U20's camera path is confirmed) construct a
            FleetObserver with source="camera" and confirm the comment matches
            the physical scene.
     - unit: U24
@@ -479,6 +543,29 @@ status:
   # 2026-07-02; publish step deliberately NOT taken. See status.pending_approval_gate
   # for the full detail + exact copy-pasteable publish commands. units_done stays 23
   # (not done until the human confirms the publish).
+  #
+  # U20/U21 PROBLEM-FIX PASS (2026-07-03, human live test on the powered robot) —
+  # both stay in status.deferred_gates (units_done unchanged, still 23; neither
+  # counted done until the human re-confirms). U20: implemented
+  # vision.default_robot_frame_provider() (lazy `reachy_mini` import, standalone
+  # ReachyMini() client -> media.get_frame(), never fakes a frame) and wired it
+  # into `fleet look --source camera` automatically (no extra flags); the
+  # generic vision.look()/capture_robot_camera() API and its existing
+  # hardware-gated tests are unchanged. U21: investigated all four requested
+  # angles (attach reachability, edge-trigger parity with the confirmed-working
+  # voice renderer, vision.look's already-exception-safe-but-under-logged
+  # behavior, speak_threadsafe's silent no-op without a live connection);
+  # couldn't conclusively pin the root cause without a live re-test, so added
+  # attempt-level + speak-attempt logging (previously only failure/success were
+  # logged) so the next live test's console pins it exactly. 10 new tests (8
+  # vision: lazy-import guard, daemon-unreachable, no-frame-yet, happy-path, CLI
+  # wiring x2; 2 observer: log-line assertions) — fleet+tools suite 560 passed,
+  # only the 2 known pre-existing profile-loading failures remain. 0 stray bg
+  # agents left by this iteration's own (fully mocked) tests; one leftover
+  # `tester` bg agent from a PRIOR iteration's test run was found via `claude
+  # agents --json` and stopped/removed during this iteration's hygiene check.
+  # See status.deferred_gates U20/U21 for the updated copy-pasteable re-test
+  # steps (U21's now include exactly which log lines to check for).
 units:
   # ---------------- Phase 2 — Fleet core + observability + persistence ----------------
   - id: U1

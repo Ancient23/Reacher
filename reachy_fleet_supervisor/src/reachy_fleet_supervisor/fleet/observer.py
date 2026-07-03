@@ -150,6 +150,9 @@ class FleetObserver:
 
     def _glance(self, m: ManagerSnapshot) -> Optional[GlanceReport]:
         question = build_glance_question(m)
+        logger.info(
+            "fleet observer: glance attempted for %s (source=%s)", m.key, self._source
+        )
         try:
             result = self._look_fn(question, source=self._source)
         except VisionError:
@@ -185,6 +188,7 @@ class FleetObserver:
         """Compute + speak glances for *snapshot*; return what was said."""
         reports = self._glances(snapshot)
         for report in reports:
+            logger.info("fleet observer: speaking glance for %s", report.key)
             try:
                 self._speak(report.comment)
             except Exception:  # noqa: BLE001 — a speech hiccup must not kill the poller

@@ -42,10 +42,12 @@ from .manager import DEFAULT_RUN_MODE, DEFAULT_PERMISSION_MODE, FleetManagerErro
 from .session_manager import SessionManager
 from .vision import (
     DEFAULT_ASSESS_TIMEOUT,
+    SOURCE_CAMERA,
     SOURCE_SCREEN,
     VALID_SOURCES,
     RobotCameraUnavailable,
     VisionError,
+    default_robot_frame_provider,
     look,
 )
 
@@ -361,8 +363,16 @@ def cmd_look(args: argparse.Namespace, out: IO[str], err: IO[str]) -> int:
 
     A bg manager runs ``fleet look "<question>"`` via Bash to visually verify
     what it built; the printed assessment flows back into its loop. The robot
-    ``camera`` source is hardware-gated (exit 2 without the physical robot).
+    ``camera`` source dials the real Reachy Mini camera via the SDK (no extra
+    flags needed) and is hardware-gated only when that real connection
+    attempt fails (exit 2 without the physical robot / daemon reachable).
     """
+    # Wire the real robot-camera frame provider by default for source=camera
+    # (U20 problem-fix: previously nothing wired the live camera at all, so
+    # this always raised RobotCameraUnavailable even on a live robot). Passed
+    # unconditionally — it's just a function reference, only ever CALLED
+    # inside vision.look() if source is actually "camera".
+    frame_provider = default_robot_frame_provider if args.source == SOURCE_CAMERA else None
     try:
         result = look(
             args.question,
@@ -372,6 +382,7 @@ def cmd_look(args: argparse.Namespace, out: IO[str], err: IO[str]) -> int:
             keep_image=args.keep,
             claude_bin=args.claude_bin,
             timeout=args.timeout,
+            frame_provider=frame_provider,
         )
     except RobotCameraUnavailable as exc:
         print(f"fleet: {exc}", file=err)

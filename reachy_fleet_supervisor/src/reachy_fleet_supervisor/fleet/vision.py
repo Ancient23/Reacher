@@ -110,6 +110,44 @@ def capture_screen(
     return _save_image(img, out_path, max_dim=max_dim)
 
 
+def default_robot_frame_provider() -> Any:  # pragma: no cover - real hardware I/O
+    """Grab one frame from the physical Reachy Mini's camera via the SDK.
+
+    Connects to the already-running local daemon with a standalone
+    ``ReachyMini()`` client (same auto-detect the rest of the app uses:
+    ``spawn_daemon=False`` — it never starts its own daemon, it just talks to
+    the one ``run.ps1`` already started) long enough to grab
+    ``reachy_mini.media.get_frame()``, then disconnects. This is the default
+    ``frame_provider`` wired into the ``fleet look --source camera`` CLI path
+    (see :mod:`~reachy_fleet_supervisor.fleet.cli`) so it works on a live
+    robot with no extra flags.
+
+    The ``reachy_mini`` import is lazy so importing this module — and running
+    the software test suite — never requires the SDK/hardware to be present.
+    Raises :class:`RobotCameraUnavailable` (never fakes a frame) if the SDK
+    isn't importable, the daemon isn't reachable, or no frame is available
+    yet — callers should treat that exactly like "no frame provider wired".
+    """
+    try:
+        from reachy_mini import ReachyMini
+    except Exception as exc:  # pragma: no cover - depends on installed SDK
+        raise RobotCameraUnavailable(
+            f"reachy_mini SDK not importable ({exc}); is it installed in this venv?"
+        ) from exc
+    try:
+        with ReachyMini() as robot:
+            frame = robot.media.get_frame()
+    except Exception as exc:  # pragma: no cover - depends on live daemon/camera
+        raise RobotCameraUnavailable(
+            f"could not reach the Reachy Mini daemon / camera: {exc}"
+        ) from exc
+    if frame is None:
+        raise RobotCameraUnavailable(
+            "Reachy Mini camera returned no frame yet (daemon reachable, camera not ready)"
+        )
+    return frame
+
+
 def capture_robot_camera(
     out_path: Optional[str | Path] = None,
     *,

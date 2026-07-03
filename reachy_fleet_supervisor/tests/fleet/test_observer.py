@@ -253,6 +253,41 @@ def test_observer_drives_off_real_fleetstate() -> None:
         unsub()
 
 
+# ---------------------------------------------------------------------------
+# diagnostic logging (U21 problem-fix 2026-07-03) — a live test reported no
+# spoken comment with no way to tell whether a glance was even attempted; the
+# observer now logs an attempt/speak line so the next live test is
+# diagnosable via the app's normal (INFO-level) logs.
+# ---------------------------------------------------------------------------
+
+
+def test_observer_logs_glance_attempt(caplog) -> None:
+    import logging
+
+    o = FleetObserver(speak=lambda _c: None, look_fn=_fake_look())
+    with caplog.at_level(logging.INFO, logger="reachy_fleet_supervisor.fleet.observer"):
+        o.on_snapshot(_fleet(_ms("a", report_state=SENTINEL_RUNNING)))  # prime
+        o.on_snapshot(_fleet(_ms("a", report_state=SENTINEL_COMPLETE)))
+    assert any("glance attempted" in r.message for r in caplog.records)
+    assert any("speaking glance" in r.message for r in caplog.records)
+
+
+def test_observer_logs_glance_attempt_even_when_vision_fails(caplog) -> None:
+    import logging
+
+    def boom(question: str, *, source: str = SOURCE_SCREEN):
+        raise VisionError("screen capture failed")
+
+    o = FleetObserver(speak=lambda _c: None, look_fn=boom)
+    with caplog.at_level(logging.INFO, logger="reachy_fleet_supervisor.fleet.observer"):
+        o.on_snapshot(_fleet(_ms("a", report_state=SENTINEL_RUNNING)))  # prime
+        o.on_snapshot(_fleet(_ms("a", report_state=SENTINEL_COMPLETE)))
+    assert any("glance attempted" in r.message for r in caplog.records)
+    assert any("glance unavailable" in r.message for r in caplog.records)
+    # Never reaches the speak step since the look failed.
+    assert not any("speaking glance" in r.message for r in caplog.records)
+
+
 def test_observer_multiple_managers_independent() -> None:
     spoken: list[str] = []
     o = FleetObserver(speak=spoken.append, look_fn=_fake_look())
