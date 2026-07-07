@@ -19,11 +19,19 @@ Reachy Mini Python app, running Windows-native.
 
 ## Run it
 
-1. Power on the Reachy Mini Lite (USB connected).
+1. Power on the Reachy Mini Lite (USB connected — use the **rear USB-C** port).
 2. Set an OpenAI key with **Realtime** access: `setx OPENAI_API_KEY "sk-..."`
 3. From `reachy_fleet_supervisor/`, in a terminal: `.\run.ps1`
 4. Talk to Reachy — chat, watch it emote, or ask it to do real work
    (e.g. *"create a file called hello.txt that says hi"* → it runs Claude Code and reports back).
+
+## Documentation
+
+- **[User Guide](docs/USER_GUIDE.md)** — running the app, talking to Reachy, spawning + steering
+  fleet managers, the web dashboard, the headless `fleet` CLI, config, and troubleshooting.
+- **[Testing Guide](docs/TESTING.md)** — the automated software suite (`uv run pytest`) plus the
+  human-run hardware/voice checks.
+- **[plan.md](plan.md)** — design and phased roadmap.
 
 ## Layout
 
